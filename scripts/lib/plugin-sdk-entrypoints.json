@@ -82,7 +82,6 @@
   "ssrf-runtime",
   "ssrf-runtime-internal",
   "media-runtime",
-  "media-base64",
   "media-store",
   "media-mime",
   "embedding-providers",
