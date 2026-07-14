@@ -252,6 +252,18 @@ describe("resolveEquivalentWhatsAppDirectChatJids", () => {
     await expect(resolveEquivalentWhatsAppDirectChatJids("123@lid")).resolves.toEqual(["123@lid"]);
   });
 
+  it("uses a prepared E164 without consulting the LID mapping store", async () => {
+    const getPNForLID = vi.fn();
+
+    await expect(
+      resolveEquivalentWhatsAppDirectChatJids("777@hosted.lid", {
+        knownE164: "+15551230000",
+        lidLookup: { getPNForLID },
+      }),
+    ).resolves.toEqual(["777@hosted.lid", "15551230000@hosted"]);
+    expect(getPNForLID).not.toHaveBeenCalled();
+  });
+
   it("preserves hosted direct-chat domains for local PN/LID mappings", async () => {
     await withTempDir("whatsapp-hosted-lid-map-", async (authDir) => {
       fs.writeFileSync(path.join(authDir, "lid-mapping-15551230000.json"), JSON.stringify("777"));

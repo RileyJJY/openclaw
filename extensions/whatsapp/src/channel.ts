@@ -89,6 +89,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
         setupWizard: whatsappSetupWizardProxy,
         setup: whatsappSetupAdapter,
+        formatAllowFrom: formatWhatsAppConfigAllowFromEntries,
         isConfigured: async (account) => {
           const channelRuntime = await loadWhatsAppChannelRuntime();
           return (await channelRuntime.readWebAuthState(account.authDir)) === "linked";

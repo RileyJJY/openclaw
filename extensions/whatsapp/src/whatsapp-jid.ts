@@ -9,15 +9,10 @@ import {
   jidDecode,
   jidEncode,
   jidNormalizedUser,
-} from "baileys/lib/WABinary/jid-utils.js";
+} from "baileys";
+import { canonicalizeWhatsAppGroupJid } from "./whatsapp-jid-syntax.js";
 
-export type WhatsAppJidServer =
-  | "s.whatsapp.net"
-  | "hosted"
-  | "lid"
-  | "hosted.lid"
-  | "g.us"
-  | "newsletter";
+type WhatsAppJidServer = "s.whatsapp.net" | "hosted" | "lid" | "hosted.lid" | "g.us" | "newsletter";
 
 export type WhatsAppDirectJid =
   | {
@@ -51,7 +46,6 @@ export type WhatsAppJid = WhatsAppDirectJid | WhatsAppRoomJid | { kind: "unsuppo
 
 const UNSUPPORTED_JID = { kind: "unsupported" } as const;
 const DIRECT_LOCAL_PART_RE = /^(\d+)(?::\d+)?$/;
-const GROUP_LOCAL_PART_RE = /^[0-9]+(?:-[0-9]+)*$/;
 const NEWSLETTER_LOCAL_PART_RE = /^\d+$/;
 
 function isValidLocalPart(server: string, localPart: string): boolean {
@@ -63,7 +57,7 @@ function isValidLocalPart(server: string, localPart: string): boolean {
     case "hosted.lid":
       return DIRECT_LOCAL_PART_RE.test(localPart);
     case "g.us":
-      return GROUP_LOCAL_PART_RE.test(localPart);
+      return canonicalizeWhatsAppGroupJid(`${localPart}@${server}`) !== null;
     case "newsletter":
       return NEWSLETTER_LOCAL_PART_RE.test(localPart);
     default:
@@ -128,7 +122,7 @@ export function classifyWhatsAppJid(value: string | null | undefined): WhatsAppJ
 export function encodeWhatsAppJid(user: string, server: WhatsAppJidServer): string {
   const validUser =
     server === "g.us"
-      ? GROUP_LOCAL_PART_RE.test(user)
+      ? canonicalizeWhatsAppGroupJid(`${user}@g.us`) !== null
       : server === "newsletter"
         ? NEWSLETTER_LOCAL_PART_RE.test(user)
         : /^\d+$/.test(user);

@@ -331,6 +331,31 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it.each(["status@broadcast", "123@broadcast", "120363401234567890@newsletter"])(
+    "ignores unsupported inbound conversation JID %s",
+    async (remoteJid) => {
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("unsupported-conversation"),
+          remoteJid,
+          participant: "999@s.whatsapp.net",
+          text: "status content",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await settleInboundWork();
+
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(sock.readMessages).not.toHaveBeenCalled();
+      await listener.close();
+    },
+  );
+
   it("delays read receipts until inbound handlers complete", async () => {
     let finishMessage: (() => void) | undefined;
     const handlerGate = new Promise<void>((resolve) => {

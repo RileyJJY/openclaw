@@ -127,7 +127,7 @@ function addEquivalentDirectChatCandidate(
 
 export async function resolveEquivalentWhatsAppDirectChatJids(
   jid: string | null | undefined,
-  opts?: JidToE164Options & { lidLookup?: LidLookup },
+  opts?: JidToE164Options & { lidLookup?: LidLookup; knownE164?: string | null },
 ): Promise<string[]> {
   const directJid = classifyDirectJid(jid);
   if (!directJid) {
@@ -146,6 +146,13 @@ export async function resolveEquivalentWhatsAppDirectChatJids(
       candidates,
       mappedLocalLid ? encodeWhatsAppJid(mappedLocalLid, localLidDomain) : null,
     );
+    return candidates;
+  }
+
+  const knownPhoneDigits = opts?.knownE164?.match(/^\+(\d+)$/)?.[1];
+  if (knownPhoneDigits) {
+    const knownPnDomain = directJid.server === "hosted.lid" ? "hosted" : "s.whatsapp.net";
+    addUniqueString(candidates, encodeWhatsAppJid(knownPhoneDigits, knownPnDomain));
     return candidates;
   }
 

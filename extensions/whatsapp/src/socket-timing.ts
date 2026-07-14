@@ -17,7 +17,7 @@ export type WhatsAppSocketTimingOptions = {
   defaultQueryTimeoutMs?: number;
 };
 
-export type WhatsAppSocketOperationAdapter = {
+type WhatsAppSocketOperationAdapter = {
   sendMessage: (
     jid: string,
     content: AnyMessageContent,

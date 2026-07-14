@@ -11,6 +11,7 @@ import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
 import { toWhatsappJid, toWhatsappJidWithLid } from "../text-runtime.js";
+import { classifyWhatsAppJid } from "../whatsapp-jid.js";
 import {
   addWhatsAppOutboundMentionsToContent,
   type WhatsAppOutboundMentionResolution,
@@ -39,6 +40,16 @@ type StructuredStickerSendOptions = {
   mimetype?: string;
 };
 
+export type WhatsAppPreparedOutboundIdentity = {
+  remoteE164?: string;
+  remoteJids?: string[];
+};
+
+type WhatsAppOutboundRoute = {
+  jid: string;
+  identity: WhatsAppPreparedOutboundIdentity;
+};
+
 function recordWhatsAppOutbound(accountId: string) {
   recordChannelActivity({
     channel: "whatsapp",
@@ -57,6 +68,7 @@ export function createWebSendApi(params: {
       jid: string,
       content: AnyMessageContent,
       options?: MiscMessageGenerationOptions,
+      identity?: WhatsAppPreparedOutboundIdentity,
     ) => Promise<WAMessage | undefined>;
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
   };
@@ -71,10 +83,23 @@ export function createWebSendApi(params: {
   // ending up in a sender-only ghost chat (#67378). Defaults to PN-only.
   authDir?: string;
 }) {
-  const resolveOutboundJid = (recipient: string): string =>
-    params.authDir
+  const resolveOutboundRoute = (recipient: string): WhatsAppOutboundRoute => {
+    const requestedJid = toWhatsappJid(recipient);
+    const requestedIdentity = classifyWhatsAppJid(requestedJid);
+    const jid = params.authDir
       ? toWhatsappJidWithLid(recipient, { authDir: params.authDir })
-      : toWhatsappJid(recipient);
+      : requestedJid;
+    return {
+      jid,
+      identity: {
+        remoteE164: requestedIdentity.kind === "pn" ? `+${requestedIdentity.user}` : undefined,
+        remoteJids:
+          requestedIdentity.kind === "pn" || requestedIdentity.kind === "lid"
+            ? [...new Set([requestedJid, jid])]
+            : undefined,
+      },
+    };
+  };
   const resolveMentions = async (
     jid: string,
     text: string,
@@ -87,8 +112,8 @@ export function createWebSendApi(params: {
     content: AnyMessageContent,
     kind: WhatsAppSendKind,
   ): Promise<WhatsAppSendResult> => {
-    const jid = resolveOutboundJid(to);
-    const result = await params.sock.sendMessage(jid, content);
+    const route = resolveOutboundRoute(to);
+    const result = await params.sock.sendMessage(route.jid, content, undefined, route.identity);
     recordWhatsAppOutbound(params.defaultAccountId);
     return normalizeWhatsAppSendResult(result, kind);
   };
@@ -102,7 +127,8 @@ export function createWebSendApi(params: {
       sendOptions?: ActiveWebSendOptions,
     ): Promise<WhatsAppSendResult> => {
       let mediaType = mediaTypeInput;
-      const jid = resolveOutboundJid(to);
+      const route = resolveOutboundRoute(to);
+      const jid = route.jid;
       let payload: AnyMessageContent;
       if (mediaBuffer) {
         mediaType ??= "application/octet-stream";
@@ -165,8 +191,8 @@ export function createWebSendApi(params: {
         messageText: sendOptions?.quotedMessageKey?.messageText,
       });
       const result = quotedOpts
-        ? await params.sock.sendMessage(jid, payload, quotedOpts)
-        : await params.sock.sendMessage(jid, payload);
+        ? await params.sock.sendMessage(jid, payload, quotedOpts, route.identity)
+        : await params.sock.sendMessage(jid, payload, undefined, route.identity);
       const results = [normalizeWhatsAppSendResult(result, mediaBuffer ? "media" : "text")];
       if (shouldSendAudioText) {
         const resolvedAudioText = await resolveMentions(jid, text);
@@ -175,8 +201,8 @@ export function createWebSendApi(params: {
           resolvedAudioText.mentionedJids,
         );
         const textResult = quotedOpts
-          ? await params.sock.sendMessage(jid, textPayload, quotedOpts)
-          : await params.sock.sendMessage(jid, textPayload);
+          ? await params.sock.sendMessage(jid, textPayload, quotedOpts, route.identity)
+          : await params.sock.sendMessage(jid, textPayload, undefined, route.identity);
         results.push(normalizeWhatsAppSendResult(textResult, "text"));
       }
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
@@ -259,22 +285,28 @@ export function createWebSendApi(params: {
     ): Promise<WhatsAppSendResult> => {
       // Resolve DM targets through the same LID-aware path as normal sends so
       // reactions land on the delivered WhatsApp message key.
-      const jid = resolveOutboundJid(chatJid);
-      const result = await params.sock.sendMessage(jid, {
-        react: {
-          text: emoji,
-          key: {
-            remoteJid: jid,
-            id: messageId,
-            fromMe,
-            participant: participant ? toWhatsappJid(participant) : undefined,
+      const route = resolveOutboundRoute(chatJid);
+      const jid = route.jid;
+      const result = await params.sock.sendMessage(
+        jid,
+        {
+          react: {
+            text: emoji,
+            key: {
+              remoteJid: jid,
+              id: messageId,
+              fromMe,
+              participant: participant ? toWhatsappJid(participant) : undefined,
+            },
           },
-        },
-      } as AnyMessageContent);
+        } as AnyMessageContent,
+        undefined,
+        route.identity,
+      );
       return normalizeWhatsAppSendResult(result, "reaction");
     },
     sendComposingTo: async (to: string): Promise<void> => {
-      const jid = resolveOutboundJid(to);
+      const jid = resolveOutboundRoute(to).jid;
       if (isWhatsAppNewsletterJid(jid)) {
         return;
       }

@@ -9,7 +9,6 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { resolveDefaultWhatsAppAccountId } from "./account-ids.js";
-import { resolveWhatsAppAccount } from "./accounts.js";
 import {
   normalizeWhatsAppOutboundPayload,
   normalizeWhatsAppPayloadText,
@@ -113,7 +112,6 @@ export function createWhatsAppOutboundBase({
 > {
   const resolveQuotedMessageKey = (params: {
     accountId: string;
-    authDir: string;
     to: string;
     replyToId?: string | null;
   }) => {
@@ -122,9 +120,7 @@ export function createWhatsAppOutboundBase({
       return undefined;
     }
     const targetJid = toWhatsappJid(params.to);
-    const cachedMeta = lookupInboundMessageMetaForTarget(params.accountId, targetJid, replyToId, {
-      authDir: params.authDir,
-    });
+    const cachedMeta = lookupInboundMessageMetaForTarget(params.accountId, targetJid, replyToId);
     return {
       id: replyToId,
       remoteJid: cachedMeta?.remoteJid ?? targetJid,
@@ -166,10 +162,8 @@ export function createWhatsAppOutboundBase({
           return { messageId: "" };
         }
         const lookupAccountId = resolveQuoteLookupAccountId(cfg, accountId);
-        const lookupAccount = resolveWhatsAppAccount({ cfg, accountId: lookupAccountId });
         const quotedMessageKey = resolveQuotedMessageKey({
           accountId: lookupAccountId,
-          authDir: lookupAccount.authDir,
           to,
           replyToId,
         });
@@ -210,10 +204,8 @@ export function createWhatsAppOutboundBase({
         onDeliveryResult,
       }) => {
         const lookupAccountId = resolveQuoteLookupAccountId(cfg, accountId);
-        const lookupAccount = resolveWhatsAppAccount({ cfg, accountId: lookupAccountId });
         const quotedMessageKey = resolveQuotedMessageKey({
           accountId: lookupAccountId,
-          authDir: lookupAccount.authDir,
           to,
           replyToId,
         });

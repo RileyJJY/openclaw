@@ -1,17 +1,12 @@
 // Whatsapp tests cover quoted message plugin behavior.
-import fs from "node:fs";
-import path from "node:path";
 import { generateWAMessageFromContent } from "baileys";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 import {
   buildQuotedMessageOptions,
   cacheInboundMessageMeta,
   lookupInboundMessageMeta,
   lookupInboundMessageMetaForTarget,
 } from "./quoted-message.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("quoted message metadata cache", () => {
   it("scopes cached metadata by account id", () => {
@@ -113,17 +108,12 @@ describe("quoted message metadata cache", () => {
     ).toBeUndefined();
   });
 
-  it("uses the account mapping directory for hosted PN/LID quote equivalence", () => {
-    const authDir = tempDirs.make("whatsapp-quote-map-");
-    fs.writeFileSync(
-      path.join(authDir, "lid-mapping-277038292303944_reverse.json"),
-      JSON.stringify("15551230000"),
-    );
+  it("uses the prepared direct-chat identity for hosted PN/LID quote equivalence", () => {
     cacheInboundMessageMeta(
       "account-hosted-map",
       "277038292303944:2@hosted.lid",
       "msg-hosted-map",
-      { body: "mapped hosted lid" },
+      { remoteE164: "+15551230000", body: "mapped hosted lid" },
     );
 
     expect(
@@ -131,7 +121,6 @@ describe("quoted message metadata cache", () => {
         "account-hosted-map",
         "15551230000:4@hosted",
         "msg-hosted-map",
-        { authDir },
       ),
     ).toEqual({
       remoteJid: "277038292303944@hosted.lid",
@@ -140,6 +129,47 @@ describe("quoted message metadata cache", () => {
       body: "mapped hosted lid",
       fromMe: undefined,
     });
+  });
+
+  it("uses prepared aliases when a PN-cached message is addressed by LID", () => {
+    cacheInboundMessageMeta("account-reverse-map", "15551230000@hosted", "msg-reverse-map", {
+      remoteE164: "+15551230000",
+      remoteJids: ["15551230000@hosted", "277038292303944@hosted.lid"],
+      body: "mapped hosted PN",
+    });
+
+    expect(
+      lookupInboundMessageMetaForTarget(
+        "account-reverse-map",
+        "277038292303944:7@hosted.lid",
+        "msg-reverse-map",
+      ),
+    ).toEqual({
+      remoteJid: "15551230000@hosted",
+      participant: undefined,
+      participantE164: undefined,
+      body: "mapped hosted PN",
+      fromMe: undefined,
+    });
+  });
+
+  it("rejects ambiguous prepared identity matches", () => {
+    cacheInboundMessageMeta("account-ambiguous", "111111111111111@lid", "msg-ambiguous", {
+      remoteE164: "+15551230000",
+      body: "first",
+    });
+    cacheInboundMessageMeta("account-ambiguous", "222222222222222@lid", "msg-ambiguous", {
+      remoteE164: "+15551230000",
+      body: "second",
+    });
+
+    expect(
+      lookupInboundMessageMetaForTarget(
+        "account-ambiguous",
+        "15551230000@s.whatsapp.net",
+        "msg-ambiguous",
+      ),
+    ).toBeUndefined();
   });
 
   it("lets Baileys encode the self participant for a cached outbound quote (#91445)", () => {
