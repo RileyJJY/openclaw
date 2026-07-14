@@ -49,6 +49,7 @@ import {
   toWhatsappJid,
   toWhatsappJidWithLid,
 } from "../text-runtime.js";
+import { classifyWhatsAppJid, isWhatsAppDirectJid } from "../whatsapp-jid.js";
 import {
   checkInboundAccessControl,
   type AcceptedInboundAccessControlResult,
@@ -96,7 +97,7 @@ import {
   resolveWhatsAppOutboundMentions,
   type WhatsAppOutboundMentionParticipant,
 } from "./outbound-mentions.js";
-import { DisconnectReason, isJidGroup } from "./runtime-api.js";
+import { DisconnectReason } from "./runtime-api.js";
 import { createWebSendApi } from "./send-api.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type {
@@ -258,10 +259,6 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
     return;
   }
   defaultRuntime.log(message);
-}
-
-function isDirectUserJid(jid: string): boolean {
-  return /^(\d+)(?::\d+)?@(s\.whatsapp\.net|c\.us|lid|hosted|hosted\.lid)$/i.test(jid.trim());
 }
 
 function getActiveReachoutTimelock(
@@ -747,7 +744,7 @@ export async function attachWebInboxToSocket(
     currentSock: WASocket,
     readinessOptions?: { rememberReady?: boolean; useVerifiedReady?: boolean },
   ) => {
-    if (!isDirectUserJid(jid)) {
+    if (!isWhatsAppDirectJid(jid)) {
       return;
     }
     if (readinessOptions?.useVerifiedReady && consumeVerifiedSendReady(jid, currentSock)) {
@@ -919,7 +916,7 @@ export async function attachWebInboxToSocket(
     jid: string,
     text: string,
   ): Promise<{ text: string; mentionedJids: string[] }> => {
-    if (isJidGroup(jid) !== true || !mayContainWhatsAppOutboundMention(text)) {
+    if (classifyWhatsAppJid(jid).kind !== "group" || !mayContainWhatsAppOutboundMention(text)) {
       return { text, mentionedJids: [] };
     }
     const meta = await getGroupMeta(jid);
@@ -973,11 +970,7 @@ export async function attachWebInboxToSocket(
     if (!remoteJid) {
       return null;
     }
-    if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast")) {
-      return null;
-    }
-
-    const group = isJidGroup(remoteJid) === true;
+    const group = classifyWhatsAppJid(remoteJid).kind === "group";
     // Drop echoes of messages the gateway itself sent (tracked by sendTrackedMessage).
     // Applies to both groups and DMs/self-chat — without this, self-chat mode
     // re-processes the bot's own replies as new inbound user messages.

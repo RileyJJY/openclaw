@@ -1,12 +1,17 @@
 // Whatsapp tests cover quoted message plugin behavior.
+import fs from "node:fs";
+import path from "node:path";
 import { generateWAMessageFromContent } from "baileys";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   buildQuotedMessageOptions,
   cacheInboundMessageMeta,
   lookupInboundMessageMeta,
   lookupInboundMessageMetaForTarget,
 } from "./quoted-message.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("quoted message metadata cache", () => {
   it("scopes cached metadata by account id", () => {
@@ -69,6 +74,70 @@ describe("quoted message metadata cache", () => {
       participant: undefined,
       participantE164: "+5511976136970",
       body: "hello from e164 participant",
+      fromMe: undefined,
+    });
+  });
+
+  it("canonicalizes device-qualified and c.us cache identities", () => {
+    cacheInboundMessageMeta("account-canonical", "15551230000:2@c.us", "msg-canonical", {
+      participant: "15557654321:3@hosted",
+      body: "canonical",
+    });
+
+    expect(
+      lookupInboundMessageMetaForTarget(
+        "account-canonical",
+        "15551230000@s.whatsapp.net",
+        "msg-canonical",
+      ),
+    ).toEqual({
+      remoteJid: "15551230000@s.whatsapp.net",
+      participant: "15557654321@hosted",
+      participantE164: undefined,
+      body: "canonical",
+      fromMe: undefined,
+    });
+  });
+
+  it("does not match same-digit PN and LID conversations without a mapping", () => {
+    cacheInboundMessageMeta("account-unmapped", "812345678901234@lid", "msg-unmapped", {
+      body: "unmapped lid",
+    });
+
+    expect(
+      lookupInboundMessageMetaForTarget(
+        "account-unmapped",
+        "812345678901234@s.whatsapp.net",
+        "msg-unmapped",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("uses the account mapping directory for hosted PN/LID quote equivalence", () => {
+    const authDir = tempDirs.make("whatsapp-quote-map-");
+    fs.writeFileSync(
+      path.join(authDir, "lid-mapping-277038292303944_reverse.json"),
+      JSON.stringify("15551230000"),
+    );
+    cacheInboundMessageMeta(
+      "account-hosted-map",
+      "277038292303944:2@hosted.lid",
+      "msg-hosted-map",
+      { body: "mapped hosted lid" },
+    );
+
+    expect(
+      lookupInboundMessageMetaForTarget(
+        "account-hosted-map",
+        "15551230000:4@hosted",
+        "msg-hosted-map",
+        { authDir },
+      ),
+    ).toEqual({
+      remoteJid: "277038292303944@hosted.lid",
+      participant: undefined,
+      participantE164: undefined,
+      body: "mapped hosted lid",
       fromMe: undefined,
     });
   });

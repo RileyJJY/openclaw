@@ -100,6 +100,12 @@ describe("toWhatsappJid", () => {
     expect(toWhatsappJid("123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(toWhatsappJid("whatsapp:123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(toWhatsappJid("1555123@s.whatsapp.net")).toBe("1555123@s.whatsapp.net");
+    expect(toWhatsappJid("1555123:3@c.us")).toBe("1555123@s.whatsapp.net");
+    expect(toWhatsappJid("1555123:4@hosted")).toBe("1555123@hosted");
+  });
+
+  it("rejects malformed existing JIDs", () => {
+    expect(() => toWhatsappJid("1555123:bad@s.whatsapp.net")).toThrow("Invalid WhatsApp JID");
   });
 });
 
@@ -147,6 +153,12 @@ describe("jidToE164", () => {
 
   it("accepts hosted PN JIDs", () => {
     expect(jidToE164("1555000:2@hosted")).toBe("+1555000");
+  });
+
+  it("accepts legacy c.us PN JIDs and rejects malformed users", () => {
+    expect(jidToE164("1555000:2@c.us")).toBe("+1555000");
+    expect(jidToE164("not-a-phone@s.whatsapp.net")).toBeNull();
+    expect(jidToE164("1555000:bad@s.whatsapp.net")).toBeNull();
   });
 
   it("falls back through lidMappingDirs in order", async () => {
@@ -229,11 +241,15 @@ describe("resolveEquivalentWhatsAppDirectChatJids", () => {
     ["15551230000:2@hosted", "15551230000@hosted"],
     ["777:1@lid", "777@lid"],
     ["777:2@hosted.lid", "777@hosted.lid"],
-  ])("includes the bare direct-chat form for %s", async (observedJid, bareJid) => {
-    await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([
-      observedJid,
-      bareJid,
+  ])("canonicalizes the direct-chat candidate for %s", async (observedJid, bareJid) => {
+    await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([bareJid]);
+  });
+
+  it("keeps same-digit PN and LID identities distinct without a mapping", async () => {
+    await expect(resolveEquivalentWhatsAppDirectChatJids("123@s.whatsapp.net")).resolves.toEqual([
+      "123@s.whatsapp.net",
     ]);
+    await expect(resolveEquivalentWhatsAppDirectChatJids("123@lid")).resolves.toEqual(["123@lid"]);
   });
 
   it("preserves hosted direct-chat domains for local PN/LID mappings", async () => {

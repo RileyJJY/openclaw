@@ -1,7 +1,6 @@
 // Whatsapp plugin module implements identity behavior.
 import { jidToE164, normalizeE164 } from "./text-runtime.js";
-
-const WHATSAPP_LID_RE = /@(lid|hosted\.lid)$/i;
+import { classifyWhatsAppJid, type WhatsAppDirectJid } from "./whatsapp-jid.js";
 
 export type WhatsAppIdentity = {
   jid?: string | null;
@@ -62,22 +61,20 @@ type LegacyMentionsLike = {
   };
 };
 
-function normalizeDeviceScopedJid(jid: string | null | undefined): string | null {
-  return jid ? jid.replace(/:\d+/, "") : null;
-}
-
-function isLidJid(jid: string | null | undefined): boolean {
-  return Boolean(jid && WHATSAPP_LID_RE.test(jid));
+function classifyDirectIdentityJid(jid: string | null | undefined): WhatsAppDirectJid | null {
+  const classified = classifyWhatsAppJid(jid);
+  return classified.kind === "pn" || classified.kind === "lid" ? classified : null;
 }
 
 export function resolveComparableIdentity(
   identity: WhatsAppIdentity | WhatsAppSelfIdentity | null | undefined,
   authDir?: string,
 ): WhatsAppIdentity {
-  const rawJid = normalizeDeviceScopedJid(identity?.jid);
-  const rawLid = normalizeDeviceScopedJid(identity?.lid);
-  const lid = rawLid ?? (isLidJid(rawJid) ? rawJid : null);
-  const jid = rawJid && !isLidJid(rawJid) ? rawJid : null;
+  const rawJid = classifyDirectIdentityJid(identity?.jid);
+  const rawLid = classifyDirectIdentityJid(identity?.lid);
+  const lid =
+    (rawLid?.kind === "lid" ? rawLid.jid : null) ?? (rawJid?.kind === "lid" ? rawJid.jid : null);
+  const jid = rawJid?.kind === "pn" ? rawJid.jid : null;
   const e164 =
     identity?.e164 != null
       ? normalizeE164(identity.e164)

@@ -1144,6 +1144,32 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it.each([
+    "15551230000:2@s.whatsapp.net",
+    "15551230000:3@c.us",
+    "15551230000:4@hosted",
+    "277038292303944:5@lid",
+    "277038292303944:6@hosted.lid",
+  ])("applies the reachout timelock to canonical direct JID %s", async (target) => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit("connection.update", {
+      reachoutTimeLock: {
+        isActive: true,
+        enforcementType: "WEB_COMPANION_ONLY",
+      },
+    });
+
+    try {
+      await expect(listener.sendMessage(target, "hello")).rejects.toThrow(
+        "WhatsApp reachout timelock is active",
+      );
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
   it("uses connection.update reachout timelock state before direct sends", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
@@ -1798,6 +1824,27 @@ describe("web monitor inbox", () => {
       expect(sock.readMessages).toHaveBeenCalledTimes(1);
     });
 
+    await listener.close();
+  });
+
+  it.each([
+    ["15551234567:2@c.us", "+15551234567"],
+    ["15557654321:3@hosted", "+15557654321"],
+  ])("normalizes direct inbound JID %s", async (remoteJid, expectedConversationId) => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const upsert = buildNotifyMessageUpsert({
+      id: nextMessageId("direct-domain"),
+      remoteJid,
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(inboundMessage(onMessage).admission?.conversation.id).toBe(expectedConversationId);
     await listener.close();
   });
 

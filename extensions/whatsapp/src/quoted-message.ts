@@ -1,6 +1,7 @@
 // Whatsapp plugin module implements quoted message behavior.
 import type { MiscMessageGenerationOptions } from "baileys";
-import { jidToE164 } from "./text-runtime.js";
+import { jidToE164, type JidToE164Options } from "./text-runtime.js";
+import { areSameWhatsAppJid, classifyWhatsAppJid } from "./whatsapp-jid.js";
 
 // ── Inbound message metadata cache ──────────────────────────────────────
 // Maps messageId → { participant, participantE164, body, fromMe } so the
@@ -25,13 +26,19 @@ function makeCacheKey(accountId: string, remoteJid: string, messageId: string): 
   return `${accountId}:${remoteJid}:${messageId}`;
 }
 
+function canonicalizeSupportedJid(jid: string | null | undefined): string | undefined {
+  const classified = classifyWhatsAppJid(jid);
+  return classified.kind === "unsupported" ? undefined : classified.jid;
+}
+
 export function cacheInboundMessageMeta(
   accountId: string,
   remoteJid: string,
   messageId: string,
   meta: QuotedMeta,
 ): void {
-  if (!accountId || !messageId || !remoteJid) {
+  const canonicalRemoteJid = canonicalizeSupportedJid(remoteJid);
+  if (!accountId || !messageId || !canonicalRemoteJid) {
     return;
   }
   if (cache.size >= MAX_ENTRIES) {
@@ -40,7 +47,11 @@ export function cacheInboundMessageMeta(
       cache.delete(oldest);
     }
   }
-  cache.set(makeCacheKey(accountId, remoteJid, messageId), { ...meta, ts: Date.now() });
+  cache.set(makeCacheKey(accountId, canonicalRemoteJid, messageId), {
+    ...meta,
+    participant: canonicalizeSupportedJid(meta.participant),
+    ts: Date.now(),
+  });
 }
 
 export function lookupInboundMessageMeta(
@@ -48,7 +59,11 @@ export function lookupInboundMessageMeta(
   remoteJid: string,
   messageId: string,
 ): QuotedMeta | undefined {
-  const cacheKey = makeCacheKey(accountId, remoteJid, messageId);
+  const canonicalRemoteJid = canonicalizeSupportedJid(remoteJid);
+  if (!canonicalRemoteJid) {
+    return undefined;
+  }
+  const cacheKey = makeCacheKey(accountId, canonicalRemoteJid, messageId);
   const entry = cache.get(cacheKey);
   if (!entry) {
     return undefined;
@@ -65,13 +80,8 @@ export function lookupInboundMessageMeta(
   };
 }
 
-function normalizeComparableJid(jid: string | undefined): string | undefined {
-  const normalized = jid?.trim().replace(/:\d+/, "").toLowerCase();
-  return normalized || undefined;
-}
-
 function isGroupJid(jid: string | undefined): boolean {
-  return Boolean(jid && jid.endsWith("@g.us"));
+  return classifyWhatsAppJid(jid).kind === "group";
 }
 
 function areComparableE164sEqual(left: string | undefined, right: string | undefined): boolean {
@@ -83,30 +93,33 @@ function areComparableE164sEqual(left: string | undefined, right: string | undef
   return normalizedLeft === normalizedRight;
 }
 
-function areComparableJidsEqual(left: string | undefined, right: string | undefined): boolean {
-  const normalizedLeft = normalizeComparableJid(left);
-  const normalizedRight = normalizeComparableJid(right);
-  if (!normalizedLeft || !normalizedRight) {
-    return false;
-  }
-  if (normalizedLeft === normalizedRight) {
+function areComparableJidsEqual(
+  left: string | undefined,
+  right: string | undefined,
+  options?: JidToE164Options,
+): boolean {
+  if (areSameWhatsAppJid(left, right)) {
     return true;
   }
-  const leftE164 = jidToE164(normalizedLeft);
-  const rightE164 = jidToE164(normalizedRight);
+  const leftE164 = left ? jidToE164(left, options) : null;
+  const rightE164 = right ? jidToE164(right, options) : null;
   return Boolean(leftE164 && rightE164 && leftE164 === rightE164);
 }
 
-function matchesQuotedConversationTarget(targetJid: string, candidate: QuotedMetaLookup): boolean {
-  if (areComparableJidsEqual(targetJid, candidate.remoteJid)) {
+function matchesQuotedConversationTarget(
+  targetJid: string,
+  candidate: QuotedMetaLookup,
+  options?: JidToE164Options,
+): boolean {
+  if (areComparableJidsEqual(targetJid, candidate.remoteJid, options)) {
     return true;
   }
   if (isGroupJid(targetJid) || isGroupJid(candidate.remoteJid)) {
     return false;
   }
   return (
-    areComparableJidsEqual(targetJid, candidate.participant) ||
-    areComparableE164sEqual(jidToE164(targetJid) ?? undefined, candidate.participantE164)
+    areComparableJidsEqual(targetJid, candidate.participant, options) ||
+    areComparableE164sEqual(jidToE164(targetJid, options) ?? undefined, candidate.participantE164)
   );
 }
 
@@ -114,14 +127,16 @@ export function lookupInboundMessageMetaForTarget(
   accountId: string,
   targetJid: string,
   messageId: string,
+  options?: JidToE164Options,
 ): QuotedMetaLookup | undefined {
-  if (!accountId || !messageId || !targetJid) {
+  const canonicalTargetJid = canonicalizeSupportedJid(targetJid);
+  if (!accountId || !messageId || !canonicalTargetJid) {
     return undefined;
   }
-  const exact = lookupInboundMessageMeta(accountId, targetJid, messageId);
+  const exact = lookupInboundMessageMeta(accountId, canonicalTargetJid, messageId);
   if (exact) {
     return {
-      remoteJid: targetJid,
+      remoteJid: canonicalTargetJid,
       participant: exact.participant,
       participantE164: exact.participantE164,
       body: exact.body,
@@ -147,7 +162,7 @@ export function lookupInboundMessageMetaForTarget(
       body: entry.body,
       fromMe: entry.fromMe,
     };
-    if (!matchesQuotedConversationTarget(targetJid, candidate)) {
+    if (!matchesQuotedConversationTarget(canonicalTargetJid, candidate, options)) {
       continue;
     }
     if (matched) {

@@ -16,6 +16,19 @@ describe("resolveWhatsAppOutboundMentions", () => {
     });
   });
 
+  it("canonicalizes c.us and hosted participant identities", () => {
+    expect(
+      resolveWhatsAppOutboundMentions({
+        chatJid: "120363000000000000@g.us",
+        text: "hi @15551234567 and @15557654321",
+        participants: [{ id: "15551234567:2@c.us" }, { id: "15557654321:3@hosted" }],
+      }),
+    ).toEqual({
+      text: "hi @15551234567 and @15557654321",
+      mentionedJids: ["15551234567@s.whatsapp.net", "15557654321@hosted"],
+    });
+  });
+
   it("rewrites phone-number tokens to LID mention text without device suffixes", () => {
     expect(
       resolveWhatsAppOutboundMentions({
@@ -49,6 +62,24 @@ describe("resolveWhatsAppOutboundMentions", () => {
     ).toEqual({
       text: "ping @277038292303944",
       mentionedJids: ["277038292303944@lid"],
+    });
+  });
+
+  it("preserves hosted LID mentions while using PN metadata for token lookup", () => {
+    expect(
+      resolveWhatsAppOutboundMentions({
+        chatJid: "120363000000000000@g.us",
+        text: "ping @+15551234567",
+        participants: [
+          {
+            id: "277038292303944:2@hosted.lid",
+            phoneNumber: "15551234567:4@hosted",
+          },
+        ],
+      }),
+    ).toEqual({
+      text: "ping @277038292303944",
+      mentionedJids: ["277038292303944@hosted.lid"],
     });
   });
 
@@ -140,7 +171,11 @@ describe("resolveWhatsAppOutboundMentions", () => {
       resolveWhatsAppOutboundMentions({
         chatJid: "120363000000000000@g.us",
         text: "hi @+15551234567",
-        participants: [{ id: "15550000000@s.whatsapp.net" }],
+        participants: [
+          { id: "15550000000@s.whatsapp.net" },
+          { id: "abc@hosted" },
+          { id: "120363000000000000@newsletter" },
+        ],
       }),
     ).toEqual({ text: "hi @+15551234567", mentionedJids: [] });
   });

@@ -4,6 +4,7 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtim
 import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
+  normalizeWhatsAppDirectPhone,
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
 
@@ -39,14 +40,15 @@ export function resolveWhatsAppOutboundTarget(params: {
 
   const allowListRaw = normalizeStringEntries(params.allowFrom ?? []);
   const hasWildcard = allowListRaw.includes("*");
-  const allowList = allowListRaw
-    .filter((entry) => entry !== "*")
-    .map((entry) => normalizeWhatsAppTarget(entry))
+  const constrainedEntries = allowListRaw.filter((entry) => entry !== "*");
+  const allowList = constrainedEntries
+    .map((entry) => normalizeWhatsAppDirectPhone(entry))
     .filter((entry): entry is string => Boolean(entry));
-  if (hasWildcard || allowList.length === 0) {
+  if (hasWildcard || constrainedEntries.length === 0) {
     return { ok: true, to: normalizedTo };
   }
-  if (allowList.includes(normalizedTo)) {
+  const normalizedTargetPhone = normalizeWhatsAppDirectPhone(normalizedTo);
+  if (normalizedTargetPhone && allowList.includes(normalizedTargetPhone)) {
     return { ok: true, to: normalizedTo };
   }
   return {

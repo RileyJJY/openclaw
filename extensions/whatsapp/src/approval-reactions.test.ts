@@ -286,6 +286,20 @@ describe("WhatsApp approval reactions", () => {
       eventRemoteJid: "276853659042038:1@lid",
       actorId: "+15551230001",
     },
+    {
+      name: "stored hosted PN target from hosted LID event",
+      storedRemoteJid: "15551230001@hosted",
+      eventRemoteJid: "276853659042038:2@hosted.lid",
+      actorId: "+15551230001",
+      pnForLid: "15551230001:3@hosted",
+    },
+    {
+      name: "stored hosted LID target from hosted PN event",
+      storedRemoteJid: "276853659042038@hosted.lid",
+      eventRemoteJid: "15551230001:4@hosted",
+      actorId: "+15551230001",
+      lidForPn: "276853659042038:5@hosted.lid",
+    },
   ])("resolves direct approval reactions across PN/LID target drift: $name", async (testCase) => {
     registerExecApprovalTarget({ remoteJid: testCase.storedRemoteJid });
     const lidLookup: LidLookup = {
