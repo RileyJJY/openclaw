@@ -4,7 +4,12 @@
  */
 
 export * from "../media/audio.js";
-export * from "@openclaw/media-core/base64";
+export {
+  canonicalizeBase64,
+  estimateBase64DecodedBytes,
+  parseBase64Source,
+  type ParsedBase64Source,
+} from "@openclaw/media-core/base64";
 export * from "@openclaw/media-core/content-length";
 export * from "@openclaw/media-core/constants";
 export * from "../media/fetch.js";
