@@ -5,7 +5,7 @@ import {
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
-  runChannelInboundEvent,
+  runPreparedInboundReply,
   type CommandTurnContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
@@ -188,6 +188,7 @@ export async function processMessage(params: {
   msg: AdmittedWebInboundMessage;
   route: ReturnType<typeof resolveAgentRoute>;
   groupHistoryKey: string;
+  groupHistoryLimit: number;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupMemberNames: Map<string, Map<string, string>>;
   connectionId: string;
@@ -221,7 +222,10 @@ export async function processMessage(params: {
   preflightAudioTranscript?: string | null;
 }) {
   const admission = requireWhatsAppInboundAdmission(params.msg);
-  if (admission.ingress.admission !== "dispatch" && admission.ingress.admission !== "observe") {
+  if (
+    admission.turnAdmission.kind !== "dispatch" &&
+    admission.turnAdmission.kind !== "observeOnly"
+  ) {
     return false;
   }
   const conversationId = admission.conversation.id;
@@ -311,7 +315,6 @@ export async function processMessage(params: {
     envelope: envelopeOptions,
     visibleReplyTo,
   });
-  let shouldClearGroupHistory = false;
   const visibleGroupHistory =
     conversationKind === "group"
       ? resolveVisibleWhatsAppGroupHistory({
@@ -348,7 +351,6 @@ export async function processMessage(params: {
         },
       });
     }
-    shouldClearGroupHistory = !(params.suppressGroupHistoryClear ?? false);
   }
 
   // Echo detection uses combined body so we don't respond twice.
@@ -525,85 +527,62 @@ export async function processMessage(params: {
     warn: params.replyLogger.warn.bind(params.replyLogger),
   });
 
-  const turnResult = await runChannelInboundEvent({
+  const turnResult = await runPreparedInboundReply({
     channel: "whatsapp",
     accountId: params.route.accountId,
-    raw: params.msg,
-    adapter: {
-      ingest: () => ({
-        id: params.msg.event.id ?? `${conversationId}:${Date.now()}`,
-        timestamp: params.msg.event.timestamp,
-        rawText: ctxPayload.RawBody ?? "",
-        textForAgent: ctxPayload.BodyForAgent,
-        textForCommands: ctxPayload.CommandBody,
-        raw: params.msg,
-      }),
-      preflight: () => {
-        const reason = admission.ingress.reasonCode;
-        if (admission.ingress.admission === "dispatch") {
-          return { admission: { kind: "dispatch", reason } };
-        }
-        if (admission.ingress.admission === "observe") {
-          return { admission: { kind: "observeOnly", reason } };
-        }
-        if (admission.ingress.admission === "skip") {
-          return { admission: { kind: "handled", reason } };
-        }
-        return {
-          admission: {
-            kind: "drop",
-            reason,
-            recordHistory: false,
+    routeSessionKey: params.route.sessionKey,
+    storePath,
+    ctxPayload,
+    recordInboundSession,
+    admission: admission.turnAdmission,
+    observeOnlyDispatchResult: false,
+    record: {
+      onRecordError: (err) => {
+        params.replyLogger.warn(
+          {
+            error: formatError(err),
+            storePath,
+            sessionKey: params.route.sessionKey,
           },
-        };
+          "failed updating session meta",
+        );
       },
-      resolveTurn: () => ({
-        channel: "whatsapp",
-        accountId: params.route.accountId,
-        routeSessionKey: params.route.sessionKey,
-        storePath,
-        ctxPayload,
-        recordInboundSession,
-        record: {
-          onRecordError: (err) => {
-            params.replyLogger.warn(
-              {
-                error: formatError(err),
-                storePath,
-                sessionKey: params.route.sessionKey,
-              },
-              "failed updating session meta",
-            );
-          },
-          trackSessionMetaTask: (task) => {
-            trackBackgroundTask(params.backgroundTasks, task);
-          },
-        },
-        runDispatch: () =>
-          dispatchWhatsAppBufferedReply({
-            cfg: params.cfg,
-            connectionId: params.connectionId,
-            context: ctxPayload,
-            deliverReply: deliverWebReply,
-            groupHistories: params.groupHistories,
-            groupHistoryKey: params.groupHistoryKey,
-            maxMediaBytes: params.maxMediaBytes,
-            maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
-            msg: params.msg,
-            onModelSelected,
-            rememberSentText: params.rememberSentText,
-            replyLogger: params.replyLogger,
-            replyPipeline: {
-              ...replyPipeline,
-              responsePrefix,
-            },
-            replyResolver: params.replyResolver,
-            route: params.route,
-            shouldClearGroupHistory,
-            statusReactionController,
-          }),
-      }),
+      trackSessionMetaTask: (task) => {
+        trackBackgroundTask(params.backgroundTasks, task);
+      },
     },
+    ...(admission.turnAdmission.kind === "dispatch" &&
+    conversationKind === "group" &&
+    params.suppressGroupHistoryClear !== true
+      ? {
+          history: {
+            isGroup: true,
+            historyKey: params.groupHistoryKey,
+            historyMap: params.groupHistories,
+            limit: params.groupHistoryLimit,
+          },
+        }
+      : {}),
+    runDispatch: () =>
+      dispatchWhatsAppBufferedReply({
+        cfg: params.cfg,
+        connectionId: params.connectionId,
+        context: ctxPayload,
+        deliverReply: deliverWebReply,
+        maxMediaBytes: params.maxMediaBytes,
+        maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
+        msg: params.msg,
+        onModelSelected,
+        rememberSentText: params.rememberSentText,
+        replyLogger: params.replyLogger,
+        replyPipeline: {
+          ...replyPipeline,
+          responsePrefix,
+        },
+        replyResolver: params.replyResolver,
+        route: params.route,
+        statusReactionController,
+      }),
   });
   const didSendReply = turnResult.dispatched ? turnResult.dispatchResult : false;
   removeAckReactionHandleAfterReply({
