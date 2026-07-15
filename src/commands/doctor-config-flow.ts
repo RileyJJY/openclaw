@@ -4,6 +4,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -401,6 +402,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note,
   });
   cfg = finalized.cfg;
+  const legacyMigrationWillReplaceStaleSource =
+    finalized.shouldWriteConfig &&
+    shouldRepair &&
+    snapshot.legacyIssues.length > 0 &&
+    validateConfigObjectWithPlugins(cfg).ok;
 
   noteOpencodeProviderOverrides(cfg);
   noteImplicitFallbackClobberWarnings(cfg);
@@ -412,7 +418,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     sourceConfigValid: snapshot.valid,
     preservedLegacyRootKeys: ["defaultModel"],
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
-    ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
+    ...(legacyMigrationPartiallyValid || legacyMigrationWillReplaceStaleSource
+      ? { skipPluginValidationOnWrite: true }
+      : {}),
     ...(shouldRepairCronCodexModelRefsAfterConfigWrite
       ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }
       : {}),

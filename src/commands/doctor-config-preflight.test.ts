@@ -93,6 +93,42 @@ describe("runDoctorConfigPreflight", () => {
     });
   });
 
+  it("lets repair preflight load plugin-owned legacy config that current schemas reject", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        channels: {
+          imessage: {
+            enabled: true,
+            coalesceSameSenderDms: true,
+          },
+        },
+      });
+
+      const inspectOnly = await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+      });
+      expect(inspectOnly.snapshot.valid).toBe(false);
+
+      const repair = await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        repairPrefixedConfig: true,
+        invalidConfigNote: false,
+      });
+      expect(repair.snapshot.valid).toBe(true);
+      expect(repair.snapshot.legacyIssues.map((issue) => issue.path)).toContain(
+        "channels.imessage",
+      );
+      expect(
+        repair.snapshot.legacyIssues.some((issue) =>
+          issue.message.includes("channels.imessage.coalesceSameSenderDms is retired"),
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("restores invalid config from last-known-good only during repair preflight", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
@@ -158,6 +194,39 @@ describe("runDoctorConfigPreflight", () => {
       await fs.writeFile(
         configPath,
         `${JSON.stringify({ gateway: { mode: "local", port: 19092 }, plugins: { deny: "bad" } }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const repaired = await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        repairPrefixedConfig: true,
+        invalidConfigNote: false,
+      });
+
+      expect(repaired.snapshot.valid).toBe(true);
+      expect(repaired.snapshot.config.gateway?.port).toBe(19091);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(lastGoodRaw);
+    });
+  });
+
+  it("restores last-known-good for malformed channel plugin config during repair", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { mode: "local", port: 19091 },
+      });
+      await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot());
+      const lastGoodRaw = await fs.readFile(configPath, "utf-8");
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: { mode: "local", port: 19092 },
+            channels: { imessage: { enabled: true, mediaMaxMb: "bad" } },
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
 

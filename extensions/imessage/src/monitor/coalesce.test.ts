@@ -1,13 +1,11 @@
 // Imessage tests cover coalesce plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  combineIMessagePayloads,
-  isStandaloneIMessageUrlPreviewPayload,
-  shouldCombineIMessagePayloadBucket,
-} from "./coalesce.js";
+import { combineIMessagePayloads } from "./coalesce.js";
 import type { IMessagePayload } from "./types.js";
 
-const URL_BALLOON_BUNDLE_ID = "com.apple.messages.URLBalloonProvider";
+const EXPECTED_MAX_COALESCED_TEXT_CHARS = 4000;
+const EXPECTED_MAX_COALESCED_ATTACHMENTS = 20;
+const EXPECTED_MAX_COALESCED_ENTRIES = 10;
 
 const makePayload = (overrides: Partial<IMessagePayload> = {}): IMessagePayload => ({
   guid: `msg-${Math.random().toString(36).slice(2, 10)}`,
@@ -35,7 +33,7 @@ describe("combineIMessagePayloads", () => {
     expect(result.guid).toBe("solo");
   });
 
-  it("merges two same-sender rows into one payload anchored on the first GUID", () => {
+  it("merges configured inbound debounce rows into one payload anchored on the first GUID", () => {
     const first = makePayload({
       id: 41,
       text: "summarize",
@@ -72,7 +70,7 @@ describe("combineIMessagePayloads", () => {
     expect(merged.attachments).toEqual([{ original_path: "/tmp/a.jpg", mime_type: "image/jpeg" }]);
   });
 
-  it("dedupes identical text appearing in both rows (URL in text and balloon)", () => {
+  it("dedupes identical text appearing in multiple rows", () => {
     const a = makePayload({ text: "https://example.com", guid: "row-1" });
     const b = makePayload({ text: "https://example.com", guid: "row-2" });
     const merged = combineIMessagePayloads([a, b]);
@@ -87,11 +85,13 @@ describe("combineIMessagePayloads", () => {
     const merged = combineIMessagePayloads([longA, longB]);
 
     expect(merged.text?.endsWith("…[truncated]")).toBe(true);
-    expect(merged.text?.length).toBeLessThanOrEqual(4000 + "…[truncated]".length);
+    expect(merged.text?.length).toBeLessThanOrEqual(
+      EXPECTED_MAX_COALESCED_TEXT_CHARS + "…[truncated]".length,
+    );
   });
 
   it("caps the attachment count", () => {
-    // 5 attachments per row × 6 rows = 30 attachments offered, capped at 20.
+    // 5 attachments per row x 6 rows = 30 attachments offered, capped at 20.
     // Stays under the entry cap so the merge isn't pruned for that reason.
     const payloads = Array.from({ length: 6 }, (_, i) =>
       makePayload({
@@ -104,11 +104,11 @@ describe("combineIMessagePayloads", () => {
     );
     const merged = combineIMessagePayloads(payloads);
 
-    expect(merged.attachments?.length).toBe(20);
+    expect(merged.attachments?.length).toBe(EXPECTED_MAX_COALESCED_ATTACHMENTS);
   });
 
   it("keeps first + most recent when entry count exceeds the cap, but tracks every GUID", () => {
-    const payloads = Array.from({ length: 25 }, (_, i) =>
+    const payloads = Array.from({ length: EXPECTED_MAX_COALESCED_ENTRIES + 15 }, (_, i) =>
       makePayload({
         id: i,
         text: `msg ${i}`,
@@ -121,9 +121,9 @@ describe("combineIMessagePayloads", () => {
     // First payload's GUID anchors the merged shape.
     expect(merged.guid).toBe("row-0");
     // Every source GUID is tracked, even those whose text was dropped by the cap.
-    expect(merged.coalescedMessageGuids?.length).toBe(25);
+    expect(merged.coalescedMessageGuids?.length).toBe(EXPECTED_MAX_COALESCED_ENTRIES + 15);
     expect(merged.coalescedMessageGuids?.[0]).toBe("row-0");
-    expect(merged.coalescedMessageGuids?.[24]).toBe("row-24");
+    expect(merged.coalescedMessageGuids?.[EXPECTED_MAX_COALESCED_ENTRIES + 14]).toBe("row-24");
     // Merged text contains only the bounded first entries plus the latest.
     expect(merged.text).toContain("msg 0");
     expect(merged.text).toContain("msg 24");
@@ -152,89 +152,5 @@ describe("combineIMessagePayloads", () => {
     const merged = combineIMessagePayloads([a, b]);
 
     expect(merged.coalescedMessageGuids).toBeUndefined();
-  });
-});
-
-describe("isStandaloneIMessageUrlPreviewPayload", () => {
-  it("matches URL balloon rows that only carry the preview URL", () => {
-    expect(
-      isStandaloneIMessageUrlPreviewPayload(
-        makePayload({
-          text: "https://example.com/article",
-          balloon_bundle_id: URL_BALLOON_BUNDLE_ID,
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("matches scheme-less www URL preview rows", () => {
-    expect(
-      isStandaloneIMessageUrlPreviewPayload(
-        makePayload({
-          text: "www.example.com/article",
-          balloon_bundle_id: URL_BALLOON_BUNDLE_ID,
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("does not match already-complete URL balloon messages with text context", () => {
-    expect(
-      isStandaloneIMessageUrlPreviewPayload(
-        makePayload({
-          text: "summarize https://example.com/article",
-          balloon_bundle_id: URL_BALLOON_BUNDLE_ID,
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("does not match non-URL balloon payloads", () => {
-    expect(
-      isStandaloneIMessageUrlPreviewPayload(
-        makePayload({
-          text: "https://example.com/article",
-          balloon_bundle_id: "com.apple.messages.HandwritingProvider",
-        }),
-      ),
-    ).toBe(false);
-  });
-});
-
-describe("shouldCombineIMessagePayloadBucket", () => {
-  it("combines a command row with a structurally marked URL balloon row", () => {
-    const command = makePayload({ text: "summarize", guid: "row-1" });
-    const preview = makePayload({
-      text: "https://example.com/article",
-      guid: "row-2",
-      balloon_bundle_id: URL_BALLOON_BUNDLE_ID,
-    });
-
-    expect(shouldCombineIMessagePayloadBucket([command, preview], true)).toBe(true);
-  });
-
-  it("keeps ordinary buffered rows separate once the bridge emits balloon metadata", () => {
-    const first = makePayload({ text: "first thought", guid: "row-1" });
-    const second = makePayload({ text: "second thought", guid: "row-2" });
-
-    expect(shouldCombineIMessagePayloadBucket([first, second], true)).toBe(false);
-  });
-
-  it("keeps non-URL balloon rows separate", () => {
-    const first = makePayload({ text: "first thought", guid: "row-1" });
-    const second = makePayload({
-      text: "second thought",
-      guid: "row-2",
-      balloon_bundle_id: "com.apple.messages.HandwritingProvider",
-    });
-
-    expect(shouldCombineIMessagePayloadBucket([first, second], false)).toBe(false);
-  });
-
-  it("falls back to combining old bridge buckets with no balloon metadata", () => {
-    const command = makePayload({ text: "summarize", guid: "row-1" });
-    const url = makePayload({ text: "https://example.com/article", guid: "row-2" });
-
-    expect(shouldCombineIMessagePayloadBucket([command, url], false)).toBe(true);
   });
 });

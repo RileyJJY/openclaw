@@ -327,18 +327,35 @@ export async function runDoctorConfigPreflight(
       ...(options.observe === false ? { observe: false } : {}),
       skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
     };
-    let snapshot = addDoctorLegacyIssues(
-      await measureStartupPreflightStep("config-snapshot", () =>
-        readConfigFileSnapshot(readOptions),
-      ),
-    );
+    const readDoctorSnapshot = async () => {
+      let next = addDoctorLegacyIssues(
+        await measureStartupPreflightStep("config-snapshot", () =>
+          readConfigFileSnapshot(readOptions),
+        ),
+      );
+      if (
+        options.repairPrefixedConfig === true &&
+        !readOptions.skipPluginValidation &&
+        next.exists &&
+        !next.valid &&
+        next.legacyIssues.length > 0
+      ) {
+        next = addDoctorLegacyIssues(
+          await measureStartupPreflightStep("config-snapshot-legacy-plugin", () =>
+            readConfigFileSnapshot({ ...readOptions, skipPluginValidation: true }),
+          ),
+        );
+      }
+      return next;
+    };
+    let snapshot = await readDoctorSnapshot();
     if (options.repairPrefixedConfig === true && snapshot.exists && !snapshot.valid) {
       if (await recoverConfigFromJsonRootSuffix(snapshot)) {
         note(
           "Removed non-JSON prefix from openclaw.json; original saved as .clobbered.*.",
           "Config",
         );
-        snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
+        snapshot = await readDoctorSnapshot();
       } else if (
         await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" })
       ) {
@@ -346,7 +363,7 @@ export async function runDoctorConfigPreflight(
           "Restored openclaw.json from last-known-good; original saved as .clobbered.*.",
           "Config",
         );
-        snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
+        snapshot = await readDoctorSnapshot();
       }
     }
     const invalidConfigNote =

@@ -93,15 +93,17 @@ type AllowedValuesCollection = {
 type JsonSchemaLike = Record<string, unknown>;
 
 function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
-    return raw;
+  let next = raw;
+  if (isRecord(next) && isRecord(next.commands) && Object.hasOwn(next.commands, "modelsWrite")) {
+    const commands = { ...next.commands };
+    delete commands.modelsWrite;
+    next = {
+      ...next,
+      commands,
+    };
   }
-  const commands = { ...raw.commands };
-  delete commands.modelsWrite;
-  return {
-    ...raw,
-    commands,
-  };
+
+  return next;
 }
 
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {

@@ -486,7 +486,7 @@ export async function noteSessionTranscriptHealth(params?: {
 
   if (params?.sessionDirs === undefined || params.sessionSqlite === true) {
     await noteSessionSqliteMigrationHealth({
-      cfg: params?.cfg,
+      ...(params?.cfg ? { cfg: params.cfg } : {}),
       env: params?.env ?? process.env,
       shouldRepair,
     });
