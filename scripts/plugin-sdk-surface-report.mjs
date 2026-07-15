@@ -215,14 +215,16 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
-      10699,
+      // +2: turn-admission mapper and side-effect type on channel-ingress-runtime.
+      10701,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
-      5386,
+      // +1: turn-admission mapper on channel-ingress-runtime.
+      5387,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
