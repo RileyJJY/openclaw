@@ -30,6 +30,7 @@ import {
   extractCliErrorMessage,
   parseCliOutput,
   type CliOutput,
+  type CliUsage,
   type CliStreamJsonOutputLimits,
   type CliStreamingDelta,
   type CliThinkingDelta,
@@ -71,6 +72,7 @@ type ClaudeLiveTurn = {
   completedToolCallIds: Set<string>;
   toolEventCount: number;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
@@ -1033,6 +1035,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
 }
 
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
+  session.currentTurn?.onCliOutput?.(chunk, "stdout");
   resetNoOutputTimer(session);
   session.stdoutBuffer += chunk;
   const maxPendingLineChars =
@@ -1131,13 +1134,13 @@ function createClaudeUserInputMessage(content: string): string {
   })}\n`;
 }
 
-async function writeTurnInput(session: ClaudeLiveSession, prompt: string): Promise<void> {
+async function writeTurnInput(session: ClaudeLiveSession, payload: string): Promise<void> {
   const stdin = session.managedRun.stdin;
   if (!stdin) {
     throw new Error("Claude CLI live session stdin is unavailable");
   }
   await new Promise<void>((resolve, reject) => {
-    stdin.write(createClaudeUserInputMessage(prompt), (error) => {
+    stdin.write(payload, (error) => {
       if (error) {
         reject(error);
         return;
@@ -1186,6 +1189,7 @@ async function createClaudeLiveSession(params: {
       },
       onStderr: (chunk) => {
         if (session) {
+          session.currentTurn?.onCliOutput?.(chunk, "stderr");
           session.stderr += chunk;
           if (session.stderr.length > LIVE_SESSION_LIMITS.maxStderrChars) {
             closeLiveSession(
@@ -1252,6 +1256,9 @@ function createTurn(params: {
   ) => ClaudeLiveToolTerminalOutcome | undefined;
   onCommentaryText?: (text: string) => void;
   onSessionId?: (sessionId: string) => void;
+  onAssistantMessage?: (message: unknown) => void;
+  onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
   session: ClaudeLiveSession;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
@@ -1293,7 +1300,10 @@ function createTurn(params: {
       },
       onCommentaryText: params.onCommentaryText,
       onSessionId: params.onSessionId,
+      onAssistantMessage: params.onAssistantMessage,
+      onUsage: params.onUsage,
     }),
+    onCliOutput: params.onCliOutput,
     execPermission: params.execPermission,
     resolve: params.resolve,
     reject: params.reject,
@@ -1380,6 +1390,10 @@ export async function runClaudeLiveSessionTurn(params: {
   onCommentaryText?: (text: string) => void;
   onMcpCaptureReady?: (captureKey: string) => void;
   onSessionId?: (sessionId: string) => void;
+  onAssistantMessage?: (message: unknown) => void;
+  onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  onCliOutput?: (chunk: string, stream: "stderr" | "stdout") => void;
+  onRequestPayload?: (payload: string) => void;
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
@@ -1601,6 +1615,9 @@ export async function runClaudeLiveSessionTurn(params: {
       resolveToolResultTerminalOutcome: params.resolveToolResultTerminalOutcome,
       onCommentaryText: params.onCommentaryText,
       onSessionId: params.onSessionId,
+      onAssistantMessage: params.onAssistantMessage,
+      onUsage: params.onUsage,
+      onCliOutput: params.onCliOutput,
       session: liveSession,
       execPermission,
       resolve,
@@ -1629,7 +1646,9 @@ export async function runClaudeLiveSessionTurn(params: {
       abort();
     } else {
       try {
-        await Promise.race([writeTurnInput(liveSession, params.prompt), outputPromise]);
+        const requestPayload = createClaudeUserInputMessage(params.prompt);
+        params.onRequestPayload?.(requestPayload);
+        await Promise.race([writeTurnInput(liveSession, requestPayload), outputPromise]);
       } catch (error) {
         closeLiveSession(liveSession, "abort", error);
       }
