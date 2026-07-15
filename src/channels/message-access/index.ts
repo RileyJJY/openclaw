@@ -9,6 +9,8 @@ export {
   resolveStableChannelMessageIngress,
 } from "./runtime.js";
 export { readChannelIngressStoreAllowFromForDmPolicy } from "./store-allow-from.js";
+export { mapChannelIngressDecisionToTurnAdmission } from "./turn-admission.js";
+export type { ChannelIngressSideEffectResult } from "./turn-admission.js";
 
 export { resolveChannelIngressState } from "./state.js";
 export type {

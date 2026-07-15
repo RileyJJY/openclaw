@@ -2,11 +2,16 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { AccessFacts } from "../channels/turn/types.js";
 import {
+  mapChannelIngressDecisionToTurnAdmission,
   resolveChannelMessageIngress,
   type ChannelIngressIdentityDescriptor,
+  type ChannelIngressSideEffectResult,
   type ResolveChannelMessageIngressParams,
 } from "./channel-ingress-runtime.js";
-import { projectIngressAccessFacts } from "./channel-ingress.js";
+import {
+  mapChannelIngressDecisionToTurnAdmission as mapLegacyChannelIngressDecisionToTurnAdmission,
+  projectIngressAccessFacts,
+} from "./channel-ingress.js";
 
 const identity = {
   primary: { normalize: (value) => value.trim().toLowerCase(), sensitivity: "pii" },
@@ -27,6 +32,19 @@ async function resolve(input: Partial<ResolveChannelMessageIngressParams> = {}) 
 }
 
 describe("plugin-sdk/channel-ingress-runtime", () => {
+  it("owns turn-admission mapping while retaining the legacy re-export", async () => {
+    const allowed = await resolve();
+    const sideEffect = { kind: "none" } satisfies ChannelIngressSideEffectResult;
+
+    expect(mapLegacyChannelIngressDecisionToTurnAdmission).toBe(
+      mapChannelIngressDecisionToTurnAdmission,
+    );
+    expect(mapChannelIngressDecisionToTurnAdmission(allowed.ingress, sideEffect)).toEqual({
+      kind: "dispatch",
+      reason: "activation_allowed",
+    });
+  });
+
   it("omits projected command facts unless command policy was requested", async () => {
     const normalMessage = await resolve();
 

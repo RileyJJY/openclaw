@@ -2,6 +2,7 @@
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   decideChannelIngress,
+  mapChannelIngressDecisionToTurnAdmission,
   resolveChannelIngressState as resolveChannelIngressStateInternal,
 } from "../channels/message-access/index.js";
 import type {
@@ -20,13 +21,13 @@ import type {
   InternalNormalizedEntry,
   IngressReasonCode,
 } from "../channels/message-access/index.js";
-import type { AccessFacts, ChannelTurnAdmission } from "../channels/turn/types.js";
+import type { AccessFacts } from "../channels/turn/types.js";
 import type {
   DmGroupAccessDecision,
   DmGroupAccessReasonCode,
 } from "../security/dm-policy-shared.js";
 
-export { decideChannelIngress };
+export { decideChannelIngress, mapChannelIngressDecisionToTurnAdmission };
 export type {
   AccessGraph,
   AccessGraphGate,
@@ -55,6 +56,7 @@ export type {
   RouteSenderAllowlistSource,
   RouteSenderPolicy,
 } from "../channels/message-access/index.js";
+export type { ChannelIngressSideEffectResult } from "../channels/message-access/index.js";
 
 /** Redacted identifier material that can be matched against channel allowlist entries. */
 export type ChannelIngressSubjectIdentifier = InternalMatchMaterial;
@@ -89,16 +91,6 @@ export type ChannelIngressDecisionBundle = {
   dmCommand: ChannelIngressDecision;
   groupCommand: ChannelIngressDecision;
 };
-
-/** Side effect produced while handling an ingress decision before turn admission is mapped. */
-export type ChannelIngressSideEffectResult =
-  | { kind: "none" }
-  | { kind: "pairing-reply-sent" }
-  | { kind: "pairing-reply-failed"; errorCode?: string }
-  | { kind: "command-reply-sent" }
-  | { kind: "command-reply-failed"; errorCode?: string }
-  | { kind: "pending-history-recorded" }
-  | { kind: "local-event-handled" };
 
 /** Minimal redacted decision summary suitable for logs and plugin diagnostics. */
 export type RedactedIngressDiagnostics = {
@@ -336,34 +328,6 @@ export function projectIngressAccessFacts(decision: ChannelIngressDecision): Acc
       : undefined,
     mentions: projectMentionFacts(activation),
   };
-}
-
-/** Convert an ingress graph decision plus any local side effect into channel turn admission. */
-export function mapChannelIngressDecisionToTurnAdmission(
-  decision: ChannelIngressDecision,
-  sideEffect: ChannelIngressSideEffectResult,
-): ChannelTurnAdmission {
-  if (decision.admission === "dispatch") {
-    return { kind: "dispatch", reason: decision.reasonCode };
-  }
-  if (decision.admission === "observe") {
-    return { kind: "observeOnly", reason: decision.reasonCode };
-  }
-  if (decision.admission === "pairing-required") {
-    return sideEffect.kind === "pairing-reply-sent"
-      ? { kind: "handled", reason: decision.reasonCode }
-      : { kind: "drop", reason: decision.reasonCode };
-  }
-  if (decision.admission === "skip") {
-    return sideEffect.kind === "pending-history-recorded" ||
-      sideEffect.kind === "local-event-handled" ||
-      sideEffect.kind === "command-reply-sent"
-      ? { kind: "handled", reason: decision.reasonCode }
-      : { kind: "drop", reason: decision.reasonCode, recordHistory: false };
-  }
-  return sideEffect.kind === "local-event-handled" || sideEffect.kind === "command-reply-sent"
-    ? { kind: "handled", reason: decision.reasonCode }
-    : { kind: "drop", reason: decision.reasonCode };
 }
 
 /** Brand a non-empty plugin id for channel ingress diagnostics and gate ids. */
