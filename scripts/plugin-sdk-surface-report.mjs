@@ -211,6 +211,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     // Its length-prefixed segment encoder and scope-key builder add two functions, also mirrored.
     // The focused HTML entity runtime and quote-aware HTML tokenizer add one public function each.
     // Plugin service Gateway event scope and emitter types add four facade exports.
+    // media-runtime adds the canonical base64 source parser and result type;
     // media-mime adds the canonical kindFromMime classifier.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
@@ -219,7 +220,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
-      10613,
+      10615,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -227,7 +228,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
-      5345,
+      5346,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
