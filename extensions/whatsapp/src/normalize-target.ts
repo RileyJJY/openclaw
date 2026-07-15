@@ -1,20 +1,15 @@
 // Whatsapp helper module supports normalize target behavior.
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeWhatsAppAllowFromEntries,
+  normalizeWhatsAppAllowFromEntry,
+} from "./allowlist-format.js";
+import { stripWhatsAppTargetPrefixes } from "./whatsapp-jid-syntax.js";
 import { classifyWhatsAppJid, type WhatsAppJid } from "./whatsapp-jid.js";
 
-const NON_WHATSAPP_PROVIDER_PREFIX_RE = /^[a-z][a-z0-9-]*:/i;
+export { normalizeWhatsAppAllowFromEntries, normalizeWhatsAppAllowFromEntry };
 
-function stripWhatsAppTargetPrefixes(value: string): string {
-  let candidate = value.trim();
-  for (;;) {
-    const before = candidate;
-    candidate = candidate.replace(/^whatsapp:/i, "").trim();
-    if (candidate === before) {
-      return candidate;
-    }
-  }
-}
+const NON_WHATSAPP_PROVIDER_PREFIX_RE = /^[a-z][a-z0-9-]*:/i;
 
 function classifyWhatsAppTargetJid(value: string): WhatsAppJid {
   const candidate = stripWhatsAppTargetPrefixes(value);
@@ -77,25 +72,6 @@ export function normalizeWhatsAppMessagingTarget(raw: string): string | undefine
     return undefined;
   }
   return normalizeWhatsAppTarget(trimmed) ?? undefined;
-}
-
-export function normalizeWhatsAppAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return uniqueStrings(
-    normalizeStringEntries(allowFrom)
-      .map(normalizeWhatsAppAllowFromEntry)
-      .filter((entry): entry is string => Boolean(entry)),
-  );
-}
-
-export function normalizeWhatsAppAllowFromEntry(entry: string): string | null {
-  if (entry === "*") {
-    return entry;
-  }
-  const normalized = normalizeWhatsAppDirectPhone(entry);
-  if (!normalized) {
-    return null;
-  }
-  return normalized.slice(1);
 }
 
 export function looksLikeWhatsAppTargetId(raw: string): boolean {
