@@ -93,8 +93,25 @@ function readLegacyDefaultsRuntime(defaults: unknown): AgentRuntimePolicyConfig 
   return asAgentRuntimePolicyConfig(asMutableRecord(defaults)?.agentRuntime);
 }
 
-function isOpenAICodexModelRef(model: string | undefined): model is string {
-  return normalizeString(model)?.startsWith("openai-codex/") === true;
+function legacyCodexModelId(model: string | undefined): string | undefined {
+  const normalized = normalizeString(model);
+  if (!normalized) {
+    return undefined;
+  }
+  const slash = normalized.indexOf("/");
+  if (slash <= 0 || slash >= normalized.length - 1) {
+    return undefined;
+  }
+  const provider = normalized.slice(0, slash);
+  if (provider !== "openai-codex" && provider !== "codex") {
+    return undefined;
+  }
+  const modelId = normalized.slice(slash + 1).trim();
+  return modelId || undefined;
+}
+
+function isLegacyCodexModelRef(model: string | undefined): model is string {
+  return legacyCodexModelId(model) !== undefined;
 }
 
 function isOpenAICodexAuthProfileRef(profile: unknown): boolean {
@@ -107,19 +124,12 @@ function isProviderlessModelRef(model: unknown): model is string {
 }
 
 function toCanonicalOpenAIModelRef(model: string): string | undefined {
-  if (!isOpenAICodexModelRef(model)) {
-    return undefined;
-  }
-  const modelId = model.slice("openai-codex/".length).trim();
+  const modelId = legacyCodexModelId(model);
   return modelId ? `openai/${modelId}` : undefined;
 }
 
 function toOpenAIModelId(model: string): string | undefined {
-  if (!isOpenAICodexModelRef(model)) {
-    return undefined;
-  }
-  const modelId = model.slice("openai-codex/".length).trim();
-  return modelId || undefined;
+  return legacyCodexModelId(model);
 }
 
 function resolveRuntime(params: {
@@ -161,7 +171,7 @@ function collectStringModelSlot(params: {
     return false;
   }
   const model = params.value.trim();
-  if (!model || !isOpenAICodexModelRef(model)) {
+  if (!model || !isLegacyCodexModelRef(model)) {
     return false;
   }
   return Boolean(
@@ -243,7 +253,7 @@ function modelRefUsesCodexRuntime(params: {
   env?: NodeJS.ProcessEnv;
 }): boolean {
   const effectiveModelRef = params.modelRef?.trim() || `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
-  if (isOpenAICodexModelRef(effectiveModelRef)) {
+  if (isLegacyCodexModelRef(effectiveModelRef)) {
     return true;
   }
   return canonicalOpenAIModelUsesCodexRuntime({
@@ -888,7 +898,7 @@ function collectModelsMapRefs(params: {
     return;
   }
   for (const modelRef of Object.keys(record)) {
-    if (!isOpenAICodexModelRef(modelRef)) {
+    if (!isLegacyCodexModelRef(modelRef)) {
       continue;
     }
     recordCodexModelHit({
@@ -1293,7 +1303,7 @@ function rewriteStringModelSlot(params: {
   }
   const value = params.container[params.key];
   const model = typeof value === "string" ? value.trim() : "";
-  if (!model || !isOpenAICodexModelRef(model)) {
+  if (!model || !isLegacyCodexModelRef(model)) {
     return false;
   }
   const canonicalModel = recordCodexModelHit({
@@ -1942,7 +1952,7 @@ function preserveMigratedLosslessCodexRuntimePolicy(params: {
   }
   const preservedOwners = new Set<string>();
   for (const hit of params.hits) {
-    if (!hit.modelValue || !isOpenAICodexModelRef(hit.modelValue)) {
+    if (!hit.modelValue || !isLegacyCodexModelRef(hit.modelValue)) {
       continue;
     }
     const canonicalModel = toCanonicalOpenAIModelRef(hit.modelValue);
@@ -2257,7 +2267,7 @@ function preRepairLegacyModelPolicyExplicitNonDefaultRuntimePin(params: {
   legacyModelRef?: string;
   agentId?: string;
 }): PreRepairRuntimePin | undefined {
-  if (!params.legacyModelRef || !isOpenAICodexModelRef(params.legacyModelRef)) {
+  if (!params.legacyModelRef || !isLegacyCodexModelRef(params.legacyModelRef)) {
     return undefined;
   }
   const parsed = parseModelRef(params.legacyModelRef);
@@ -2878,7 +2888,7 @@ export function collectCodexRouteWarnings(params: {
   if (hits.length > 0) {
     warnings.push(
       [
-        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- Retired `openai-codex/*` or `codex/*` model refs should be rewritten to `openai/*`.",
         ...hits.map(
           (hit) =>
             `- ${hit.path}: ${hit.model} should become ${hit.canonicalModel}${
@@ -3022,7 +3032,7 @@ function rewriteSessionModelPair(params: {
   const provider = normalizeString(params.entry[params.providerKey]);
   const model =
     typeof params.entry[params.modelKey] === "string" ? params.entry[params.modelKey] : undefined;
-  if (provider === "openai-codex") {
+  if (provider === "openai-codex" || provider === "codex") {
     params.entry[params.providerKey] = "openai";
     if (model) {
       const modelId = toOpenAIModelId(model);
@@ -3032,7 +3042,7 @@ function rewriteSessionModelPair(params: {
     }
     return true;
   }
-  if (model && isOpenAICodexModelRef(model)) {
+  if (model && isLegacyCodexModelRef(model)) {
     const canonicalModel = toCanonicalOpenAIModelRef(model);
     if (canonicalModel) {
       params.entry[params.modelKey] = canonicalModel;
@@ -3044,8 +3054,8 @@ function rewriteSessionModelPair(params: {
 
 function clearStaleCodexFallbackNotice(entry: SessionEntry): boolean {
   if (
-    !isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) &&
-    !isOpenAICodexModelRef(entry.fallbackNoticeActiveModel)
+    !isLegacyCodexModelRef(entry.fallbackNoticeSelectedModel) &&
+    !isLegacyCodexModelRef(entry.fallbackNoticeActiveModel)
   ) {
     return false;
   }
@@ -3140,17 +3150,17 @@ function scanCodexSessionStoreRoutes(store: Record<string, SessionEntry>): strin
       return [];
     }
     const hasLegacyRoute =
-      normalizeString(entry.modelProvider) === "openai-codex" ||
-      normalizeString(entry.providerOverride) === "openai-codex" ||
-      isOpenAICodexModelRef(entry.model) ||
-      isOpenAICodexModelRef(entry.modelOverride) ||
+      ["openai-codex", "codex"].includes(normalizeString(entry.modelProvider) ?? "") ||
+      ["openai-codex", "codex"].includes(normalizeString(entry.providerOverride) ?? "") ||
+      isLegacyCodexModelRef(entry.model) ||
+      isLegacyCodexModelRef(entry.modelOverride) ||
       (isProviderlessModelRef(entry.modelOverride) &&
         isOpenAICodexAuthProfileRef(entry.authProfileOverride) &&
         entry.authProfileOverrideSource === "auto" &&
         entry.modelOverrideSource === "auto" &&
         !normalizeString(entry.providerOverride)) ||
-      isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) ||
-      isOpenAICodexModelRef(entry.fallbackNoticeActiveModel);
+      isLegacyCodexModelRef(entry.fallbackNoticeSelectedModel) ||
+      isLegacyCodexModelRef(entry.fallbackNoticeActiveModel);
     return hasLegacyRoute ? [sessionKey] : [];
   });
 }
@@ -3189,7 +3199,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
         stale.length > 0
           ? [
               [
-                "- Legacy `openai-codex/*` session route state detected.",
+                "- Retired `openai-codex/*` or `codex/*` session route state detected.",
                 `- Affected sessions: ${stale.length}.`,
                 "- Run `openclaw doctor --fix` to rewrite stale session model/provider pins across all agent session stores.",
               ].join("\n"),

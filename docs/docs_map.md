@@ -5617,7 +5617,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Auth and environment isolation
   - H2: Dynamic tools
   - H2: Timeouts
-  - H2: Model discovery
+  - H2: Native model listing
   - H2: Workspace bootstrap files
   - H2: Environment overrides
   - H2: Related

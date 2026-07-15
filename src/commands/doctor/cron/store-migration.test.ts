@@ -110,7 +110,7 @@ describe("normalizeStoredCronJobs", () => {
           kind: "agentTurn",
           message: "ping",
           model: " openai-codex/gpt-5.5 ",
-          fallbacks: ["anthropic/claude-opus-4.6", "openai-codex/gpt-5.4-mini"],
+          fallbacks: ["anthropic/claude-opus-4.6", "codex/gpt-5.6-sol"],
         },
       }),
     );
@@ -121,7 +121,7 @@ describe("normalizeStoredCronJobs", () => {
     expect(payload.kind).toBe("agentTurn");
     expect(payload.message).toBe("ping");
     expect(payload.model).toBe("openai/gpt-5.5");
-    expect(payload.fallbacks).toEqual(["anthropic/claude-opus-4.6", "openai/gpt-5.4-mini"]);
+    expect(payload.fallbacks).toEqual(["anthropic/claude-opus-4.6", "openai/gpt-5.6-sol"]);
   });
 
   it("converts legacy agent command prompts into command cron payloads", () => {

@@ -1,6 +1,6 @@
 # OpenClaw Codex
 
-Official OpenClaw plugin for OpenAI Codex app-server integration. It exposes the Codex-managed GPT model catalog, the Codex runtime surfaces used by OpenClaw agents, and opt-in supervision of native Codex sessions.
+Official OpenClaw plugin for OpenAI Codex app-server integration. It exposes the Codex runtime surfaces used by OpenClaw agents and opt-in supervision of native Codex sessions. Selectable text models remain in OpenClaw's canonical `openai/*` catalog.
 
 Install from OpenClaw:
 

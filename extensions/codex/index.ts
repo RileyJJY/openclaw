@@ -1,6 +1,6 @@
 /**
- * Bundled Codex plugin entry: app-server harness, model provider, media
- * understanding, migration provider, CLI-session commands, and binding hooks.
+ * Codex plugin entry: app-server harness, media understanding, migration,
+ * CLI-session commands, and binding hooks.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
@@ -13,7 +13,6 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { buildCodexProvider } from "./provider.js";
 import { readCodexPluginConfig } from "./src/app-server/config.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -44,6 +43,7 @@ import {
   createCodexSupervisionTools,
 } from "./src/supervision-tools.js";
 import { createCodexWebSearchProvider } from "./src/web-search-provider.js";
+import { buildCodexUsageProvider } from "./usage-provider.js";
 
 const ENDED_SESSION_REASONS: ReadonlySet<string> = new Set([
   "new",
@@ -56,8 +56,7 @@ const ENDED_SESSION_REASONS: ReadonlySet<string> = new Set([
 export default definePluginEntry({
   id: "codex",
   name: "Codex",
-  description:
-    "Codex app-server harness, Codex-managed GPT catalog, and native session supervision.",
+  description: "Codex app-server harness and native session supervision.",
   register(api) {
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
@@ -94,6 +93,7 @@ export default definePluginEntry({
       }),
     );
     registerCodexCliMetadata(api);
+    api.registerProvider(buildCodexUsageProvider({ pluginConfig: api.pluginConfig }));
     const sessionCatalogControl = createCodexSessionCatalogControl({
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
@@ -141,7 +141,6 @@ export default definePluginEntry({
         resolvePluginConfig: resolveCurrentPluginConfig,
       }),
     );
-    api.registerProvider(buildCodexProvider({ pluginConfig: api.pluginConfig }));
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );

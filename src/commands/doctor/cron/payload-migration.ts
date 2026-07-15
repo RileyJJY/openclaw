@@ -52,7 +52,7 @@ function toCanonicalOpenAIModelRef(value: unknown): string | undefined {
     return undefined;
   }
   const provider = trimmed.slice(0, slash).trim().toLowerCase();
-  if (provider !== "openai-codex") {
+  if (provider !== "openai-codex" && provider !== "codex") {
     return undefined;
   }
   const model = trimmed.slice(slash + 1).trim();
@@ -114,7 +114,7 @@ function parseLegacyAgentTurnCommandMessage(message: string): LegacyAgentTurnCom
   };
 }
 
-/** Return true when a cron payload contains legacy `openai-codex/*` model refs. */
+/** Return true when a cron payload contains a retired Codex provider model ref. */
 export function hasLegacyOpenAICodexCronModelRef(payload: UnknownRecord): boolean {
   if (toCanonicalOpenAIModelRef(payload.model)) {
     return true;

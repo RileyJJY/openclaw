@@ -145,8 +145,8 @@ export function createCodexAppServerAgentHarness(options: {
       return { supported: true, priority: 100 };
     },
     runAttempt: async (params) => {
-      // Keep app-server runtime code behind lazy imports so plugin discovery and
-      // cold provider catalog reads do not pull in the whole Codex runtime.
+      // Keep app-server runtime code behind lazy imports so cold plugin discovery
+      // does not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, {
         bindingStore: options.bindingStore,

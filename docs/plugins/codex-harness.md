@@ -61,7 +61,7 @@ channel is the communication surface.
   explicit Codex API-key auth profile.
 
 For auth precedence, environment isolation, custom app-server commands,
-model discovery, and the full config field list, see
+model listing, and the full config field list, see
 [Codex harness reference](/plugins/codex-harness-reference).
 
 ## Quickstart
@@ -241,7 +241,7 @@ switching compaction backends.
 
 The rest of this page covers deployment shape, fail-closed routing, guardian
 approval policy, native Codex plugins, and Computer Use. For full option
-lists, defaults, enums, discovery, environment isolation, timeouts, and
+lists, defaults, enums, environment isolation, timeouts, and
 app-server transport fields, see
 [Codex harness reference](/plugins/codex-harness-reference).
 
@@ -973,9 +973,9 @@ is enabled, that `plugins.allow` includes it when an allowlist is
 configured, and that any custom `appServer.command`, `url`, `authToken`, or
 headers are valid.
 
-**Model discovery is slow:** lower
-`plugins.entries.codex.config.discovery.timeoutMs` or disable discovery.
-See [Codex harness reference](/plugins/codex-harness-reference#model-discovery).
+**`/codex models` is slow:** check the configured app-server transport and
+account. The command queries Codex app-server directly; selectable text models
+remain in the canonical `openai/*` catalog.
 
 **WebSocket transport fails immediately:** check `appServer.url`,
 `authToken`, headers, and that the remote app-server speaks the same Codex

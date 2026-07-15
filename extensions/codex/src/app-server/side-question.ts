@@ -19,7 +19,7 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { readCodexSupportedReasoningEfforts } from "../../provider.js";
+import { readCodexSupportedReasoningEfforts } from "../../model-reasoning.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";

@@ -70,11 +70,35 @@ describe("collectCodexRouteWarnings", () => {
 
     expect(warnings).toStrictEqual([
       [
-        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- Retired `openai-codex/*` or `codex/*` model refs should be rewritten to `openai/*`.",
         "- agents.defaults.model: openai-codex/gpt-5.5 should become openai/gpt-5.5.",
         "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
       ].join("\n"),
     ]);
+  });
+
+  it("repairs shipped codex provider refs into OpenAI refs with Codex runtime policy", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "codex/ gpt-5.6-sol ",
+            models: {
+              "codex/gpt-5.6-sol": { alias: "sol" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.cfg.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": { alias: "sol", agentRuntime: { id: "codex" } },
+    });
+    expect(result.changes.join("\n")).toContain(
+      "agents.defaults.model: codex/ gpt-5.6-sol -> openai/gpt-5.6-sol",
+    );
   });
 
   it("surfaces enabled Codex Computer Use in doctor warnings", () => {
@@ -152,7 +176,7 @@ describe("collectCodexRouteWarnings", () => {
 
     expect(warnings).toStrictEqual([
       [
-        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- Retired `openai-codex/*` or `codex/*` model refs should be rewritten to `openai/*`.",
         '- agents.defaults.model: openai-codex/gpt-5.5 should become openai/gpt-5.5; current runtime is "codex".',
         "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
       ].join("\n"),
@@ -175,7 +199,7 @@ describe("collectCodexRouteWarnings", () => {
 
     expect(warnings).toStrictEqual([
       [
-        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- Retired `openai-codex/*` or `codex/*` model refs should be rewritten to `openai/*`.",
         "- agents.defaults.model: openai-codex/gpt-5.5 should become openai/gpt-5.5.",
         "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
       ].join("\n"),
@@ -1289,7 +1313,7 @@ describe("collectCodexRouteWarnings", () => {
 
     expect(collectCodexRouteWarnings({ cfg })).toStrictEqual([
       [
-        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- Retired `openai-codex/*` or `codex/*` model refs should be rewritten to `openai/*`.",
         "- hooks.gmail.model: openai-codex/gpt-5.4 should become openai/gpt-5.4.",
         "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
       ].join("\n"),
@@ -1769,7 +1793,7 @@ describe("collectCodexRouteWarnings", () => {
 
     expect(collectCodexRouteWarnings({ cfg })).toStrictEqual([
       [
-        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- Retired `openai-codex/*` or `codex/*` model refs should be rewritten to `openai/*`.",
         "- hooks.gmail.model: openai-codex/gpt-5.4 should become openai/gpt-5.4.",
         "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
       ].join("\n"),
@@ -3880,7 +3904,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([
       [
-        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- Retired `openai-codex/*` or `codex/*` model refs should be rewritten to `openai/*`.",
         "- agents.defaults.heartbeat.model: openai-codex/gpt-5.4 should become openai/gpt-5.4.",
         "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
       ].join("\n"),
@@ -3961,7 +3985,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([
       [
-        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- Retired `openai-codex/*` or `codex/*` model refs should be rewritten to `openai/*`.",
         "- hooks.gmail.model: openai-codex/gpt-5.4 should become openai/gpt-5.4.",
         "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
       ].join("\n"),
@@ -4030,6 +4054,33 @@ describe("collectCodexRouteWarnings", () => {
     ).toBeUndefined();
     expect(expectDefined(store.other, "store.other test invariant").updatedAt).toBe(2);
     expect(expectDefined(store.other, "store.other test invariant").agentHarnessId).toBe("codex");
+  });
+
+  it("repairs persisted session routes from the shipped codex provider namespace", () => {
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "s1",
+        updatedAt: 1,
+        modelProvider: "codex",
+        model: "gpt-5.6-sol",
+        providerOverride: "codex",
+        modelOverride: "codex/gpt-5.6-terra",
+        agentRuntimeOverride: "codex",
+      },
+    };
+
+    expect(repairCodexSessionStoreRoutes({ store, now: 123 })).toEqual({
+      changed: true,
+      sessionKeys: ["main"],
+    });
+    expect(store.main).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+      providerOverride: "openai",
+      modelOverride: "gpt-5.6-terra",
+      updatedAt: 123,
+    });
+    expect(store.main?.agentRuntimeOverride).toBeUndefined();
   });
 
   it("skips valid locked agent-harness rows while repairing ordinary legacy routes", () => {

@@ -11,7 +11,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
-import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import {
   isMaxReasoningCodexModel,
   isModernCodexModel,
@@ -19,7 +18,8 @@ import {
   resolveCodexFallbackReasoningEfforts,
   resolveCodexSupportedReasoningEffort,
   type CodexReasoningEffort,
-} from "../../provider.js";
+} from "../../model-reasoning.js";
+import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,

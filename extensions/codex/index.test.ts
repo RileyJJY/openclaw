@@ -53,7 +53,25 @@ describe("codex plugin", () => {
     expect(manifest.enabledByDefault).toBeUndefined();
   });
 
-  it("registers the codex provider, agent harness, native thread tool, and hosted web search", () => {
+  it("keeps model catalog ownership on OpenAI while declaring the internal usage hook", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as {
+      providers?: unknown;
+      providerCatalogEntry?: unknown;
+      syntheticAuthRefs?: unknown;
+    };
+
+    expect(manifest.providers).toEqual(["codex"]);
+    expect(manifest.providerCatalogEntry).toBeUndefined();
+    expect(manifest.syntheticAuthRefs).toBeUndefined();
+    expect(
+      (manifest as { contracts?: { usageProviders?: unknown } }).contracts?.usageProviders,
+    ).toEqual(["codex"]);
+    expect(plugin.description).toBe("Codex app-server harness and native session supervision.");
+  });
+
+  it("registers the agent harness, native thread tool, and hosted web search", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
     const registerMediaUnderstandingProvider = vi.fn();
@@ -86,7 +104,6 @@ describe("codex plugin", () => {
       }),
     );
 
-    const providerRegistration = mockCallArg(registerProvider) as Record<string, unknown>;
     const agentHarnessRegistration = mockCallArg(registerAgentHarness) as Record<string, unknown>;
     const mediaProviderRegistration = mockCallArg(registerMediaUnderstandingProvider) as
       | Record<string, unknown>
@@ -96,8 +113,14 @@ describe("codex plugin", () => {
       | [unknown]
       | undefined;
 
-    expect(providerRegistration.id).toBe("codex");
-    expect(providerRegistration.label).toBe("Codex");
+    expect(registerProvider).toHaveBeenCalledOnce();
+    expect(mockCallArg(registerProvider)).toMatchObject({
+      id: "codex",
+      auth: [],
+      fetchUsageSnapshot: expect.any(Function),
+    });
+    expect(mockCallArg(registerProvider)).not.toHaveProperty("catalog");
+    expect(mockCallArg(registerProvider)).not.toHaveProperty("staticCatalog");
     expect(agentHarnessRegistration.id).toBe("codex");
     expect(agentHarnessRegistration.label).toBe("Codex agent harness");
     expect(agentHarnessRegistration.deliveryDefaults).toEqual({
@@ -362,8 +385,7 @@ describe("codex plugin", () => {
     delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
 
     plugin.register(api);
-    expect(registerProvider).toHaveBeenCalledTimes(1);
-    expect((mockCallArg(registerProvider) as { id?: string } | undefined)?.id).toBe("codex");
+    expect(registerProvider).toHaveBeenCalledOnce();
   });
 
   it("claims the Codex routing providers by default", () => {

@@ -1,10 +1,10 @@
 ---
-summary: "Configuration, auth, discovery, and app-server reference for the Codex harness"
+summary: "Configuration, auth, and app-server reference for the Codex harness"
 title: "Codex harness reference"
 read_when:
   - You need every Codex harness config field
-  - You are changing app-server transport, auth, discovery, or timeout behavior
-  - You are debugging Codex harness startup, model discovery, or environment isolation
+  - You are changing app-server transport, auth, or timeout behavior
+  - You are debugging Codex harness startup, model listing, or environment isolation
 ---
 
 This reference covers detailed configuration for the official `codex` plugin.
@@ -22,10 +22,6 @@ All Codex harness settings live under `plugins.entries.codex.config`.
       codex: {
         enabled: true,
         config: {
-          discovery: {
-            enabled: true,
-            timeoutMs: 2500,
-          },
           appServer: {
             mode: "guardian",
           },
@@ -40,13 +36,12 @@ Top-level fields:
 
 | Field                      | Default                  | Meaning                                                                                                                                        |
 | -------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `discovery`                | enabled                  | Model discovery settings for Codex app-server `model/list`.                                                                                    |
 | `appServer`                | managed stdio app-server | Transport, command, auth, approval, sandbox, and timeout settings. The ordinary harness defaults to agent-scoped state.                        |
 | `codexDynamicToolsLoading` | `"searchable"`           | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context.                                                       |
 | `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                                                    |
 | `codexPlugins`             | disabled                 | Native Codex plugin/app support, including opt-in access to connected account apps. See [Native Codex plugins](/plugins/codex-native-plugins). |
 | `computerUse`              | disabled                 | Codex Computer Use setup. See [Codex Computer Use](/plugins/codex-computer-use).                                                               |
-| `sessionCatalog`           | enabled                  | Native Codex session discovery for the sidebar. Set `enabled: false` to disable discovery without disabling the provider or harness.           |
+| `sessionCatalog`           | enabled                  | Native Codex session discovery for the sidebar. Set `enabled: false` to disable discovery without disabling the harness.                       |
 | `supervision`              | disabled                 | Agent-facing native-session transcript and write-control policy. See [Codex supervision](/plugins/codex-supervision).                          |
 
 ## Supervision
@@ -570,21 +565,16 @@ armed watch state. When the last notification is a raw assistant response
 item, they also include a bounded assistant text preview. They do not
 include raw prompt or tool content.
 
-## Model discovery
+## Native model listing
 
-By default, the Codex plugin asks the app-server for available models. Model
-availability is owned by Codex app-server, so the list can change when
-OpenClaw upgrades the bundled `@openai/codex` version or when a deployment
-points `appServer.command` at a different Codex binary. Availability can also
-be account-scoped. Use `/codex models` on a running gateway to see the live
-catalog for that harness and account.
+`/codex models` asks Codex app-server for the models available to the active
+harness and account. Model availability can change when OpenClaw upgrades the
+managed `@openai/codex` version, when a deployment points `appServer.command`
+at another Codex binary, or when account access changes.
 
-If discovery fails or times out, OpenClaw uses a bundled fallback catalog:
-
-| Model id       | Display name | Reasoning efforts        |
-| -------------- | ------------ | ------------------------ |
-| `gpt-5.5`      | gpt-5.5      | low, medium, high, xhigh |
-| `gpt-5.4-mini` | GPT-5.4-Mini | low, medium, high, xhigh |
+This native list is diagnostic. OpenClaw's selectable text-model catalog is
+owned by the canonical `openai` provider and publishes `openai/*` refs; the
+Codex plugin does not publish a separate `codex/*` text-model namespace.
 
 <Note>
 The current bundled harness is `@openai/codex` `0.144.3`. A `model/list` probe
@@ -609,46 +599,6 @@ than relying on any point-in-time table. Hidden models can also appear in the
 app-server catalog for internal or specialized flows without being normal
 model-picker choices.
 </Note>
-
-Tune discovery under `plugins.entries.codex.config.discovery`:
-
-```json5
-{
-  plugins: {
-    entries: {
-      codex: {
-        enabled: true,
-        config: {
-          discovery: {
-            enabled: true,
-            timeoutMs: 2500,
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-Disable discovery when you want startup to avoid probing Codex and use only
-the fallback catalog:
-
-```json5
-{
-  plugins: {
-    entries: {
-      codex: {
-        enabled: true,
-        config: {
-          discovery: {
-            enabled: false,
-          },
-        },
-      },
-    },
-  },
-}
-```
 
 ## Workspace bootstrap files
 
