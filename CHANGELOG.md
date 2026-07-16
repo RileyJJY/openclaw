@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Memory Core legacy index recovery:** keep canonical per-agent search-index rows when stale legacy metadata, chunk, cache, vector, or FTS rows collide, archive the derived sidecar, and preserve retry warnings for structural vector errors so upgrades no longer leave Doctor and Gateway readiness in a permanent retry loop. Fixes #107220. Thanks @liewjiajun.
 - **Tlon SSE connect cleanup:** disarm opening deadlines after failed HTTP responses and rejected stream opens so reconnect attempts cannot leave stale timers behind. (#104585) Thanks @hugenshen.
 - **LINE reply-token media kinds:** honor video and audio metadata on inbound replies, share the canonical media builder with proactive sends, and fail visibly instead of recording empty media-only deliveries. (#106515) Thanks @edenfunf.
 - **Mattermost websocket connection deadlines:** bound opening handshakes so stalled TCP peers cannot hang channel startup indefinitely and reconnect control resumes after timeout. (#105553) Thanks @hugenshen.
