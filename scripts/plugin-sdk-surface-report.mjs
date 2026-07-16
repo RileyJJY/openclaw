@@ -222,24 +222,26 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // +9: app-guided provider setup context/candidate/hook types and their public mirrors.
+      // +3: atomic SQLite STRICT migration function, options, and result for plugin stores.
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
       // Harvest: retired qa-live-transport-scenarios subpath -6.
       // +12: typed plan step/status and checklist formatter across channel barrels.
       // +8: plan-step ingress union and normalizer across channel barrels.
       // +4: dual-field plan payload builder for the steps deprecation window.
-      10639,
+      10642,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // +1: atomic SQLite STRICT migration for plugin stores.
       // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
       // Harvest: retired qa-live-transport-scenarios subpath -3.
       // +4: shared plan checklist formatter across channel barrels.
       // +4: plan-step normalizer across channel barrels.
       // +4: dual-field plan payload builder for the steps deprecation window.
-      5353,
+      5354,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
