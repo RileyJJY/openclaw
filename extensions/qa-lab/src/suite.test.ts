@@ -466,7 +466,7 @@ describe("qa suite", () => {
     }
   });
 
-  it("writes Crabline channel-driver smoke artifacts when selected", async () => {
+  it("writes the selected Crabline driver with an honest failed result", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-");
     try {
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -487,7 +487,14 @@ describe("qa suite", () => {
         outputDir,
         startedAt: new Date("2026-04-11T00:00:00.000Z"),
         finishedAt: new Date("2026-04-11T00:01:00.000Z"),
-        scenarios: [{ name: "Telegram DM", status: "pass", steps: [] }],
+        scenarios: [
+          {
+            name: "Telegram DM",
+            status: "fail",
+            details: "active transport does not implement this scenario",
+            steps: [],
+          },
+        ],
         scenarioDefinitions: [
           {
             ...makeQaSuiteTestScenario("telegram-dm", {
@@ -546,11 +553,18 @@ describe("qa suite", () => {
       ) as { smoke?: { result?: { ok?: boolean; provider?: string } } };
       expect(smoke.smoke?.result).toMatchObject({ ok: true, provider: "telegram" });
       const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
-        entries?: Array<{ execution?: { channel?: { driver?: string; id?: string } } }>;
+        entries?: Array<{
+          execution?: { channel?: { driver?: string; id?: string } };
+          result?: { failure?: { reason?: string }; status?: string };
+        }>;
       };
       expect(evidence.entries?.[0]?.execution?.channel).toMatchObject({
         driver: "crabline",
         id: "telegram",
+      });
+      expect(evidence.entries?.[0]?.result).toMatchObject({
+        failure: { reason: "active transport does not implement this scenario" },
+        status: "fail",
       });
     } finally {
       await fs.rm(outputDir, { recursive: true, force: true });
