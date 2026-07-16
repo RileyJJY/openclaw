@@ -2201,7 +2201,7 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.allow).toEqual(["keep"]);
+    expect(result.config.plugins?.allow).toEqual(["lossless-claw", "keep"]);
     expect(result.outcomes).toEqual([
       {
         pluginId: "lossless-claw",
@@ -2297,7 +2297,7 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.allow).toEqual(["other"]);
+    expect(result.config.plugins?.allow).toEqual(["demo", "other"]);
     expect(result.config.plugins?.slots?.memory).toBe("memory-core");
     expect(result.outcomes).toEqual([
       {
@@ -2883,7 +2883,7 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
-  it("disables enabled tracked plugin update failures when requested", async () => {
+  it("disables enabled tracked plugin update failures without changing trust policy", async () => {
     const warn = vi.fn();
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
@@ -2930,7 +2930,7 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.allow).toEqual(["other"]);
+    expect(result.config.plugins?.allow).toEqual(["demo", "other"]);
     expect(result.config.plugins?.deny).toEqual(["blocked"]);
     expect(result.config.plugins?.slots).toEqual({
       memory: "memory-core",
@@ -3033,7 +3033,7 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.allow).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["demo"]);
     expect(result.config.plugins?.slots?.memory).toBe("memory-core");
     expect(result.outcomes).toEqual([
       {
@@ -3158,7 +3158,7 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
-  it("disables an existing ClawHub plugin when its current release is blocked", async () => {
+  it("disables a blocked ClawHub plugin without changing trust policy", async () => {
     const warn = vi.fn();
     installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
@@ -3182,7 +3182,7 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.allow).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["demo"]);
     expect(result.config.plugins?.slots).toEqual({
       memory: "memory-core",
     });
