@@ -4291,7 +4291,11 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("orders declined native tool diagnostics after their start event", async () => {
-    const projector = await createProjector();
+    const observeToolTerminal = vi.fn(createCodexTestToolTerminalObserver());
+    const projector = await createProjector({
+      ...(await createParams()),
+      observeToolTerminal,
+    });
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
 
@@ -4371,13 +4375,15 @@ describe("CodexAppServerEventProjector", () => {
       toolName: "bash",
       meta: "run tests (workspace)",
       error: "codex native tool blocked",
-      mutatingAction: true,
-      actionFingerprint: JSON.stringify({
-        type: "commandExecution",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-      }),
+      mutatingAction: false,
     });
+    expect(observeToolTerminal).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        executionStarted: false,
+        nativeMutation: { mutatingAction: false, replaySafe: true },
+        outcome: "failure",
+      }),
+    );
   });
 
   it.each(["failed", "cancelled", "timed_out"] as const)(
@@ -4594,12 +4600,7 @@ describe("CodexAppServerEventProjector", () => {
       toolName: "bash",
       meta: "run tests (workspace)",
       error: "codex native tool blocked",
-      mutatingAction: true,
-      actionFingerprint: JSON.stringify({
-        type: "commandExecution",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-      }),
+      mutatingAction: false,
     });
 
     await projector.handleNotification(
@@ -4683,7 +4684,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(observeToolTerminal).toHaveBeenCalledTimes(4);
   });
 
-  it("does not clear a declined native tool error with a different action", async () => {
+  it("clears a declined pre-execution error after a later successful action", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(
@@ -4721,17 +4722,7 @@ describe("CodexAppServerEventProjector", () => {
       }),
     );
 
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
-      toolName: "bash",
-      meta: "run tests (workspace)",
-      error: "codex native tool blocked",
-      mutatingAction: true,
-      actionFingerprint: JSON.stringify({
-        type: "commandExecution",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-      }),
-    });
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
   });
 
   it("emits after_tool_call observations for Codex-native tool item completions", async () => {
