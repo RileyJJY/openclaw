@@ -41,7 +41,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Plugin update policy preservation:** preserve operator-authored `plugins.allow` and `plugins.deny` entries when a failed managed-plugin update disables its runtime entry, while resetting active slots so the broken plugin cannot load. Fixes #107224.
 - **Tlon SSE connect cleanup:** disarm opening deadlines after failed HTTP responses and rejected stream opens so reconnect attempts cannot leave stale timers behind. (#104585) Thanks @hugenshen.
 - **LINE reply-token media kinds:** honor video and audio metadata on inbound replies, share the canonical media builder with proactive sends, and fail visibly instead of recording empty media-only deliveries. (#106515) Thanks @edenfunf.
 - **Mattermost websocket connection deadlines:** bound opening handshakes so stalled TCP peers cannot hang channel startup indefinitely and reconnect control resumes after timeout. (#105553) Thanks @hugenshen.
