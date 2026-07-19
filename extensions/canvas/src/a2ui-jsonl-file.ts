@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 
 const READ_CHUNK_BYTES = 64 * 1024;
 
-// A larger raw file cannot fit in the Gateway's 25 MiB frame after RPC serialization.
-const MAX_A2UI_JSONL_FILE_BYTES = 25 * 1024 * 1024;
+// Ceil raw file size below the Gateway's 25 MiB frame limit, reserving ~5 MiB
+// for JSON-RPC envelope bytes and JSON-string escaping during serialization.
+const MAX_A2UI_JSONL_FILE_BYTES = 20 * 1024 * 1024;
 
 /** Reads an A2UI JSONL file without buffering more than the transport can accept. */
 export async function readA2UIJsonlFile(filePath: string): Promise<string> {
