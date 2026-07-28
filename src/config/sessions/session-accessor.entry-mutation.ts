@@ -1,10 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   resolveAccessStorePath,
+  loadExactSessionEntry,
   loadSessionEntry,
   listSessionEntries,
   patchSessionEntry,
@@ -105,13 +107,16 @@ export async function canonicalizeSessionEntryAliases(params: {
     entry: SessionEntry | undefined,
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 }): Promise<CanonicalizeSessionEntryAliasesResult> {
-  const store = Object.fromEntries(
-    listSessionEntries({ agentId: params.agentId, storePath: params.storePath }).map(
-      ({ sessionKey, entry }) => [sessionKey, entry],
-    ),
-  );
   const targetKeys = normalizeTargetStoreKeys(params.target);
-  const freshest = resolveFreshestTargetEntry(store, targetKeys);
+  const targetEntries = targetKeys.flatMap((sessionKey) => {
+    const entry = loadExactSessionEntry({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      sessionKey,
+      storePath: params.storePath,
+    });
+    return entry ? [entry] : [];
+  });
+  const freshest = resolveFreshestTargetEntry(targetEntries, targetKeys);
   const patch = params.update ? await params.update(cloneOptionalEntry(freshest?.entry)) : null;
   const entry = patch
     ? ({
@@ -364,7 +369,7 @@ export type UpdateSessionLastRouteParams = {
   /** Account owning the delivery route when the channel is multi-account. */
   accountId?: string;
   /** Delivery channel id persisted as the last route channel. */
-  channel?: SessionEntry["lastChannel"];
+  channel?: string;
   /** Set false to only patch existing entries; missing sessions stay absent. */
   createIfMissing?: boolean;
   /** Optional inbound context whose session metadata is derived alongside the route. */
@@ -374,7 +379,7 @@ export type UpdateSessionLastRouteParams = {
   /** Group routing resolution for group-owned session keys. */
   groupResolution?: GroupKeyResolution | null;
   /** Canonical channel route persisted as the session route slot. */
-  route?: SessionEntry["route"];
+  route?: ChannelRouteRef;
   /** Canonical or alias session key for the routed conversation. */
   sessionKey: string;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */

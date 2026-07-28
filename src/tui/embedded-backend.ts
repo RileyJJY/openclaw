@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -169,7 +170,7 @@ const embeddedSessionStartupMigrationLog = {
 function hasProviderWildcardModelAllowlist(cfg: OpenClawConfig) {
   const modelMaps = [
     cfg.agents?.defaults?.models,
-    ...(cfg.agents?.list?.map((agent) => agent?.models) ?? []),
+    ...listAgentEntries(cfg).map((agent) => agent.models),
   ];
   return modelMaps.some((models) =>
     Object.keys(models ?? {}).some((key) => key.trim().endsWith("/*")),
@@ -697,6 +698,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const cfg = getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
       agentId: opts?.agentId,
+      projection: "list",
     });
     return (await listSessionsFromStoreAsync({
       cfg,
@@ -1526,9 +1528,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
 
       if (!run.finalSent) {
-        const normalizedText = payloadText(result?.payloads);
-        if (normalizedText && !run.buffer) {
-          run.buffer = normalizedText;
+        const finalText = payloadText(result?.payloads);
+        // A completed response is authoritative; keep the stream only when it has no final text.
+        if (finalText) {
+          run.buffer = finalText;
         }
         const stopReason =
           run.lifecycleStopReason ??

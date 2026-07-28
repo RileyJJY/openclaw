@@ -611,6 +611,33 @@ describe("Claude session catalog", () => {
     expect(provider?.resolveCreateSession?.({})).toBeUndefined();
   });
 
+  it("detects a Claude CLI route pinned to a non-default Claude model", () => {
+    // Regression: route detection previously probed only the packaged default
+    // model id, so bumping that default silently stopped advertising session
+    // creation for configs routing an older Claude model.
+    for (const routedModel of ["anthropic/claude-opus-4-8", "anthropic/claude-sonnet-4-6"]) {
+      const config = {
+        agents: { defaults: { models: { [routedModel]: { agentRuntime: { id: "claude-cli" } } } } },
+      } as unknown as OpenClawConfig;
+      let provider: SessionCatalogProvider | undefined;
+      const api = {
+        id: "anthropic",
+        config,
+        runtime: { config: { current: () => config } },
+        registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+          provider = candidate;
+        },
+      } as unknown as OpenClawPluginApi;
+
+      registerClaudeSessionCatalog(api);
+
+      expect(provider?.resolveCreateSession?.({})).toEqual({
+        model: routedModel,
+        agentRuntime: "claude-cli",
+      });
+    }
+  });
+
   it("resolves creation against the requested agent's runtime policy", () => {
     const config = {
       agents: {
@@ -2234,18 +2261,31 @@ describe("Claude session catalog", () => {
       await openGate;
       return await originalOpen(...args);
     });
-    const listNodes = vi.fn(async () => ({ nodes: [] }));
+    const runtimeListNodes = vi.fn(async () => ({ nodes: [] }));
+    const requestListNodes = vi.fn(async () => ({ nodes: [] }));
     const provider = captureCatalogProvider({
-      nodes: { list: listNodes },
+      nodes: { list: runtimeListNodes },
     } as unknown as PluginRuntime);
 
-    const listing = provider.list({});
+    const listing = provider.list({ listNodes: requestListNodes });
     await opened;
-    expect(listNodes).toHaveBeenCalledOnce();
+    expect(requestListNodes).toHaveBeenCalledOnce();
+    expect(runtimeListNodes).not.toHaveBeenCalled();
     releaseOpen();
     await expect(listing).resolves.toMatchObject([
       { hostId: "gateway:local", sessions: [expect.objectContaining({ threadId: sessionId })] },
     ]);
+  });
+
+  it("falls back to the plugin node runtime without a request snapshot", async () => {
+    const runtimeListNodes = vi.fn(async () => ({ nodes: [] }));
+    const provider = captureCatalogProvider({
+      nodes: { list: runtimeListNodes },
+    } as unknown as PluginRuntime);
+
+    await expect(provider.list({ hostIds: ["node:missing"] })).resolves.toEqual([]);
+
+    expect(runtimeListNodes).toHaveBeenCalledOnce();
   });
 
   it("keeps the underlying paired-node list failure", async () => {

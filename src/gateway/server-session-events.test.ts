@@ -13,11 +13,12 @@ const sessionRow = vi.hoisted(() => ({
   thinkingDefault: "medium",
   agentRuntime: { id: "openclaw", source: "model" },
 }));
-const isEmbeddedAgentRunActiveMock = vi.hoisted(() => vi.fn());
+const isEmbeddedAgentRunInProgressMock = vi.hoisted(() => vi.fn());
+const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("./chat-display-projection.js", () => ({
-  projectChatDisplayMessage: (message: unknown) => message,
+  projectChatDisplayMessage: projectChatDisplayMessageMock,
 }));
 vi.mock("./session-utils.js", () => ({
   attachOpenClawTranscriptMeta: (message: unknown) => message,
@@ -31,12 +32,14 @@ vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
   );
   return {
     ...actual,
-    isEmbeddedAgentRunActive: (...args: unknown[]) => isEmbeddedAgentRunActiveMock(...args),
+    isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
   };
 });
 
 const { createLifecycleEventBroadcastHandler, createTranscriptUpdateBroadcastHandler } =
   await import("./server-session-events.js");
+const { createGatewayBroadcaster } = await import("./server-broadcast.js");
+const { subscribePluginSessionsChanged } = await import("../plugins/gateway-events.js");
 
 function createActiveRun(projectSessionActive: boolean): ChatAbortControllerEntry {
   return {
@@ -79,7 +82,7 @@ async function emitAssistantTranscriptUpdate(
 describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    isEmbeddedAgentRunActiveMock.mockReturnValue(false);
+    isEmbeddedAgentRunInProgressMock.mockReturnValue(false);
     sessionRow.thinkingLevel = "ultra";
   });
 
@@ -128,14 +131,14 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   });
 
   it("keeps transcript snapshots active for embedded or channel reply runs", async () => {
-    isEmbeddedAgentRunActiveMock.mockImplementation((sessionId) => sessionId === "sess-main");
+    isEmbeddedAgentRunInProgressMock.mockImplementation((sessionId) => sessionId === "sess-main");
 
     await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
       sessionKey: "agent:main:main",
       hasActiveRun: true,
       session: { key: "agent:main:main", sessionId: "sess-main", hasActiveRun: true },
     });
-    expect(isEmbeddedAgentRunActiveMock).toHaveBeenCalledWith("sess-main");
+    expect(isEmbeddedAgentRunInProgressMock).toHaveBeenCalledWith("sess-main");
   });
 
   it("broadcasts user idempotency keys in session.message metadata", async () => {
@@ -167,6 +170,36 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       senderIsOwner: true,
     });
   });
+
+  it("publishes message-phase changes to plugins without websocket subscribers", async () => {
+    const received = vi.fn();
+    const unsubscribe = subscribePluginSessionsChanged(received);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const handler = createTranscriptUpdateBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set() },
+      sessionMessageSubscribers: { get: () => new Set() },
+      chatAbortControllers: new Map(),
+    });
+    projectChatDisplayMessageMock.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined);
+
+    try {
+      handler({
+        sessionFile: "/tmp/sess-main.jsonl",
+        sessionKey: "agent:main:main",
+        message: { role: "toolResult", content: [] },
+        messageId: "message-1",
+        messageSeq: 1,
+      });
+      await vi.waitFor(() => expect(received).toHaveBeenCalledOnce());
+      expect(received).toHaveBeenCalledWith({
+        sessionKey: "agent:main:main",
+        phase: "message",
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
 });
 
 describe("createLifecycleEventBroadcastHandler", () => {
@@ -196,5 +229,32 @@ describe("createLifecycleEventBroadcastHandler", () => {
       new Set(["conn-1"]),
       { dropIfSlow: true },
     );
+  });
+
+  it("publishes lifecycle changes to plugins without websocket subscribers", async () => {
+    const received = vi.fn();
+    const unsubscribe = subscribePluginSessionsChanged(received);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set() },
+      chatAbortControllers: new Map(),
+    });
+
+    try {
+      handler({
+        sessionKey: "agent:main:main",
+        reason: "rename",
+        label: "Renamed session",
+      });
+      await Promise.resolve();
+      expect(received).toHaveBeenCalledWith({
+        sessionKey: "agent:main:main",
+        label: "Renamed session",
+        reason: "rename",
+      });
+    } finally {
+      unsubscribe();
+    }
   });
 });

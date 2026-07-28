@@ -17,9 +17,11 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
+  assertSqliteSessionEntrySelectionUnchanged,
   collectSessionEntryLookupKeys,
   deleteLegacySessionEntryRows,
   readSessionEntryRow,
+  readSqliteSessionEntrySelectionSnapshot,
   readSqliteSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -145,15 +147,26 @@ export function replaceSqliteTranscriptEventsSync(
 export async function trimSqliteTranscriptForManualCompact(
   scope: SessionTranscriptAccessScope,
   selectRetainedLines: (lines: readonly string[]) => readonly string[] | null,
+  options: { nowMs?: number } = {},
 ): Promise<{ trimmed: false } | { archivedPath: string; kept: number; trimmed: true }> {
   const resolved = resolveSqliteTranscriptScope(scope);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const snapshot = readSqliteTranscriptSnapshot(database, resolved.sessionId);
+    const sessionSnapshot = readSqliteSessionEntrySelectionSnapshot(
+      database,
+      resolved.sessionKey,
+      true,
+    );
     const lines = snapshot.rows.map((row) => row.eventJson);
     const retainedLines = selectRetainedLines(lines);
     if (!retainedLines) {
       return { trimmed: false };
+    }
+    if (sessionSnapshot.selected?.entry.sessionId !== resolved.sessionId) {
+      throw new Error(
+        `Cannot compact SQLite transcript ${resolved.sessionId} without its current session entry`,
+      );
     }
     const retainedEvents = retainedLines.map((line) => JSON.parse(line) as TranscriptEvent);
     const archivedPath = writeSqliteTranscriptArchive({
@@ -164,10 +177,42 @@ export async function trimSqliteTranscriptForManualCompact(
     });
     // Published archives can be reused by another process before this commit.
     // Retain them on failure so a sibling operation never loses its durable proof.
+    let previousIdentity = new Map<string, SessionEntry>();
+    let currentIdentity = new Map<string, SessionEntry>();
     runOpenClawAgentWriteTransaction((writeDatabase) => {
       assertSqliteTranscriptSnapshotUnchanged(writeDatabase, resolved.sessionId, snapshot.rows);
+      const freshSessionSnapshot = readSqliteSessionEntrySelectionSnapshot(
+        writeDatabase,
+        resolved.sessionKey,
+        true,
+      );
+      assertSqliteSessionEntrySelectionUnchanged(
+        sessionSnapshot,
+        freshSessionSnapshot,
+        "session.transcript.manual-compact",
+      );
+      const freshEntry = freshSessionSnapshot.selected?.entry;
+      if (!freshEntry || freshEntry.sessionId !== resolved.sessionId) {
+        throw new Error(`SQLite session changed before compacting ${resolved.sessionId}`);
+      }
+      const identityKeys = collectSessionEntryLookupKeys(writeDatabase, resolved.sessionKey);
+      previousIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, identityKeys);
       replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, retainedEvents);
+      const nextEntry = cloneSessionEntry(freshEntry);
+      delete nextEntry.contextBudgetStatus;
+      delete nextEntry.inputTokens;
+      delete nextEntry.outputTokens;
+      delete nextEntry.totalTokens;
+      delete nextEntry.totalTokensFresh;
+      nextEntry.updatedAt = options.nowMs ?? Date.now();
+      // The transcript rewrite and token invalidation describe one generation.
+      // Keep them in this transaction so either both become visible or neither does.
+      writeSessionEntry(writeDatabase, resolved.sessionKey, nextEntry, {
+        previousEntry: freshEntry,
+      });
+      currentIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, identityKeys);
     }, toDatabaseOptions(resolved));
+    emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     return { archivedPath, kept: retainedLines.length, trimmed: true };
   });
 }
@@ -283,6 +328,7 @@ export function appendSqliteTranscriptEventSync(
 export async function appendSqliteExpectedSessionTranscriptTurn(
   scope: SessionTranscriptWriteScope,
   options: {
+    atomicGroup?: boolean;
     config?: import("../types.openclaw.js").OpenClawConfig;
     cwd?: string;
     expectedLifecycleRevision?: string;
@@ -331,12 +377,21 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
         const { shouldAppend: _shouldAppend, ...appendOptions } = append;
         const appended = appendSqliteTranscriptMessageInTransaction(transactionDb, resolved, {
           ...appendOptions,
+          messageAlreadyRedacted: options.atomicGroup === true,
           ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
           ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
         });
         if (appended) {
           appendedMessages.push(appended);
         }
+      }
+      if (
+        options.atomicGroup &&
+        (appendedMessages.length !== messages.length ||
+          appendedMessages.some((message) => message.appended) !==
+            appendedMessages.every((message) => message.appended))
+      ) {
+        throw new Error("SQLite transcript batch was not wholly inserted or replayed");
       }
 
       const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
@@ -545,7 +600,7 @@ function assertSqliteTranscriptSnapshotUnchanged(
 function appendSqliteTranscriptMessageInTransaction<TMessage>(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
-  options: TranscriptMessageAppendOptions<TMessage>,
+  options: TranscriptMessageAppendOptions<TMessage> & { messageAlreadyRedacted?: boolean },
 ): TranscriptMessageAppendResult<TMessage> | undefined {
   const idempotencyKey = readMessageIdempotencyKey(options.message);
   if (idempotencyKey && options.idempotencyLookup !== "caller-checked") {
@@ -573,7 +628,9 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
 
   const messageId = options.eventId ?? randomUUID();
   const now = options.now ?? Date.now();
-  const finalMessage = redactTranscriptMessageForStorage(prepared, options);
+  const finalMessage = options.messageAlreadyRedacted
+    ? prepared
+    : redactTranscriptMessageForStorage(prepared, options);
   ensureTranscriptHeader(database, resolved, options.cwd, now);
   const parentId =
     options.parentId === undefined

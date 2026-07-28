@@ -56,7 +56,7 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- A stable Codex app-server from `0.143.0` through `0.144.6`. The plugin manages a compatible
+- A stable Codex app-server from `0.143.0` through `0.145.0`. The plugin manages a compatible
   binary by default, so a `codex` command on `PATH` does not affect normal
   startup.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -141,7 +141,17 @@ user Codex home:
 User-home mode supports a local managed stdio process or the shared Unix-socket
 transport. It uses `$CODEX_HOME` when set and `~/.codex` otherwise, including
 that home's native Codex auth, config, plugins, and thread store. OpenClaw does
-not inject an OpenClaw auth profile into this app-server.
+not inject an OpenClaw auth profile into this app-server, even when the agent's
+model route has a stored OpenAI profile: a subscription route is verified
+against the native account instead. Log in with Codex itself if a turn reports
+missing subscription credentials.
+
+Because user-home mode refuses a prepared OpenClaw auth profile outright
+(`Prepared Codex auth requires an isolated app-server home.`), a stored OpenAI
+profile plus `homeScope: "user"` stops the agent from starting. Check with
+`openclaw models auth list --provider openai` and remove the stored profile with
+`openclaw models auth logout <profileId> --yes`, or switch back to
+`homeScope: "agent"` if you want OpenClaw to keep managing that credential.
 
 Owner turns gain the `codex_threads` tool: list, search, read, fork, rename,
 archive, and restore native threads. Fork a thread to continue it in
@@ -1108,7 +1118,7 @@ Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
 **The app-server is rejected:** use a stable Codex app-server from `0.143.0`
-through the bundled `0.144.6`. Prereleases, build-suffixed versions, and newer
+through the bundled `0.145.0`. Prereleases, build-suffixed versions, and newer
 unvalidated releases are rejected because OpenClaw validates generated schemas
 against the bundled app-server version.
 
