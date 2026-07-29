@@ -7,6 +7,7 @@ import { collectDependencyPinViolations } from "../../scripts/check-dependency-p
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
+const itUnix = process.platform === "win32" ? it.skip : it;
 
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -41,17 +42,21 @@ function writeJson(filePath: string, value: unknown) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function writeGitFixture(binDir: string, body: string): void {
-  if (process.platform === "win32") {
-    const fixturePath = path.join(binDir, "git-fixture.mjs");
-    writeFileSync(fixturePath, body);
-    writeFileSync(
-      path.join(binDir, "git.cmd"),
-      `@echo off\r\n"${process.execPath}" "${fixturePath}" %*\r\n`,
-    );
-    return;
-  }
-  writeFileSync(path.join(binDir, "git"), `#!${process.execPath}\n${body}`, { mode: 0o755 });
+function stubHangingGit(cwd: string, stalledSubcommand: "ls-files" | "show") {
+  const binDir = path.join(cwd, "fake-git-bin");
+  mkdirSync(binDir);
+  const fixture = `#!${process.execPath}
+if (process.argv[2] === ${JSON.stringify(stalledSubcommand)}) {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1_000);
+} else if (process.argv[2] === "ls-files") {
+  process.stdout.write("package.json\\0");
+} else {
+  process.exitCode = 1;
+}
+`;
+  writeFileSync(path.join(binDir, "git"), fixture, { mode: 0o755 });
+  vi.stubEnv("PATH", `${binDir}${path.delimiter}${process.env.PATH ?? ""}`);
 }
 
 function makeRepo() {
@@ -175,20 +180,29 @@ packageExtensions:
     expect(collectDependencyPinViolations(dir)).toEqual([]);
   });
 
-  it("fails with an actionable timeout when git ls-files hangs", () => {
-    const tempDir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-timeout-");
-    const binDir = path.join(tempDir, "bin");
-    mkdirSync(binDir);
-    writeGitFixture(
-      binDir,
-      'if (process.argv[2] === "ls-files") { setTimeout(() => {}, 10_000); }\nelse { process.exit(0); }\n',
-    );
-    vi.stubEnv("PATH", binDir);
+  itUnix("terminates a SIGTERM-resistant git ls-files at the dependency-pin timeout", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-ls-files-timeout-");
+    stubHangingGit(dir, "ls-files");
 
-    expect(() => collectDependencyPinViolations(tempDir, { gitTimeoutMs: 500 })).toThrow(
-      "dependency pin guard: git ls-files -z -- *package.json timed out after 500ms.",
+    expect(() => collectDependencyPinViolations(dir, { gitTimeoutMs: 200 })).toThrow(
+      "dependency pin guard: git ls-files -z -- *package.json timed out after 200ms.",
     );
   });
+
+  itUnix(
+    "terminates a SIGTERM-resistant sparse-index git show at the dependency-pin timeout",
+    () => {
+      const dir = makeRepo();
+      writeJson(path.join(dir, "package.json"), {});
+      git(dir, ["add", "package.json"]);
+      rmSync(path.join(dir, "package.json"));
+      stubHangingGit(dir, "show");
+
+      expect(() => collectDependencyPinViolations(dir, { gitTimeoutMs: 200 })).toThrow(
+        "dependency pin guard: git show :package.json timed out after 200ms.",
+      );
+    },
+  );
 
   it("rejects floating workspace overrides and package extension dependencies", () => {
     const dir = makeRepo();

@@ -17,32 +17,23 @@ const PINNED_GITHUB_TARBALL_PATTERN =
   /^https:\/\/codeload\.github\.com\/[^/\s]+\/[^/\s]+\/tar\.gz\/[0-9a-f]{40}$/iu;
 const DEFAULT_GIT_TIMEOUT_MS = 60_000;
 
-function formatGitArgs(args) {
-  return args.join(" ");
-}
-
-function createGitError(args, error, timeoutMs) {
-  const timedOut =
-    error?.code === "ETIMEDOUT" ||
-    error?.signal === "SIGTERM" ||
-    /timed out|timeout/i.test(String(error?.message ?? ""));
-  return new Error(
-    timedOut
-      ? `dependency pin guard: git ${formatGitArgs(args)} timed out after ${timeoutMs}ms.`
-      : `dependency pin guard: git ${formatGitArgs(args)} failed.`,
-    { cause: error },
-  );
-}
-
 function runGit(cwd, args, timeoutMs = DEFAULT_GIT_TIMEOUT_MS) {
   try {
     return execFileSync("git", args, {
       cwd,
       encoding: "utf8",
       timeout: timeoutMs,
+      // A synchronous child that ignores SIGTERM otherwise keeps its parent blocked.
+      killSignal: "SIGKILL",
     });
   } catch (error) {
-    throw createGitError(args, error, timeoutMs);
+    if (error?.code === "ETIMEDOUT") {
+      throw new Error(
+        `dependency pin guard: git ${args.join(" ")} timed out after ${timeoutMs}ms.`,
+        { cause: error },
+      );
+    }
+    throw error;
   }
 }
 
@@ -145,20 +136,17 @@ export function collectDependencyPinViolations(
 /**
  * Builds the full dependency pin audit payload.
  */
-function collectDependencyPinAudit(
-  cwd = process.cwd(),
-  { gitTimeoutMs = DEFAULT_GIT_TIMEOUT_MS } = {},
-) {
-  const packageJsonFiles = listTrackedPackageJsonFiles(cwd, gitTimeoutMs);
+function collectDependencyPinAudit(cwd = process.cwd()) {
+  const packageJsonFiles = listTrackedPackageJsonFiles(cwd);
   let packageSpecCount = 0;
   for (const relativePath of packageJsonFiles) {
-    const packageJson = readTrackedJson(cwd, relativePath, gitTimeoutMs);
+    const packageJson = readTrackedJson(cwd, relativePath);
     for (const section of PACKAGE_DEPENDENCY_SECTIONS) {
       packageSpecCount += Object.keys(packageJson[section] ?? {}).length;
     }
   }
   const workspaceViolations = collectWorkspaceViolations(cwd);
-  const violations = [...collectPackageJsonViolations(cwd, gitTimeoutMs), ...workspaceViolations];
+  const violations = [...collectPackageJsonViolations(cwd), ...workspaceViolations];
   return {
     packageManifestCount: packageJsonFiles.length,
     packageSpecCount,
@@ -197,7 +185,7 @@ export async function main() {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(
     /** @param {unknown} error */ (error) => {
-      console.error(error instanceof Error ? error.message : String(error));
+      console.error(error);
       process.exit(1);
     },
   );
