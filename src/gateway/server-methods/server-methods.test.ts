@@ -235,6 +235,7 @@ describe("waitForAgentJob", () => {
     startedAt: number;
     events: ReadonlyArray<Parameters<typeof emitAgentEvent>[0]["data"]>;
     expected: Record<string, unknown>;
+    advanceMs?: number;
     verifyCached?: boolean;
     verifyNoError?: boolean;
   }) {
@@ -250,7 +251,7 @@ describe("waitForAgentJob", () => {
       for (const data of params.events) {
         emitAgentEvent({ runId, stream: "lifecycle", data });
       }
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(params.advanceMs ?? 15_000);
       const snapshot = await waitPromise;
       expectRecordFields(snapshot, params.expected);
       if (params.verifyNoError) {
@@ -528,6 +529,8 @@ describe("waitForAgentJob", () => {
         endedAt: 1_300,
         error: "final error",
       },
+      // Unmarked errors stay provisional for the active wait after grace.
+      advanceMs: 20_000,
     });
   });
 
