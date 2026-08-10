@@ -17,7 +17,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
+import { writeBackfillDiaryEntries } from "./dreaming-diary-file.js";
 import {
   clearMemoryCoreWorkspaceNamespace,
   SESSION_BACKFILL_REWIND_NAMESPACE,

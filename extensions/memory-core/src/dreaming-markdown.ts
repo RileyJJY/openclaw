@@ -1,19 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   formatMemoryDreamingDay,
   type MemoryDreamingPhaseName,
   type MemoryDreamingStorageConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import {
-  replaceManagedMarkdownBlock,
-  withTrailingNewline,
-} from "openclaw/plugin-sdk/memory-host-markdown";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { updateDeepDreamsFile } from "./dreaming-dreams-file.js";
-import { getMemoryWorkspaceMaintenance, readWorkspaceText } from "./memory-workspace-files.js";
+import { updateDeepDreamsFile, updateManagedDreamingMarkdownFile } from "./dreaming-dreams-file.js";
+import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
@@ -25,6 +20,7 @@ const DAILY_PHASE_LABELS: Record<Exclude<MemoryDreamingPhaseName, "deep">, strin
   light: "light",
   rem: "rem",
 };
+const DEFAULT_DAILY_MEMORY_FILE_MODE = 0o600;
 
 function resolvePhaseMarkers(phase: Exclude<MemoryDreamingPhaseName, "deep">): {
   start: string;
@@ -89,46 +85,41 @@ export async function writeDailyDreamingPhaseBlock(params: {
   workspaceDir: string;
   phase: Exclude<MemoryDreamingPhaseName, "deep">;
   bodyLines: string[];
-  hasContent: boolean;
+  hasContent?: boolean;
   nowMs?: number;
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
 }): Promise<{ inlinePath?: string; reportPath?: string }> {
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No notable updates.";
+  const hasContent = params.hasContent ?? true;
   let inlinePath: string | undefined;
   let reportPath: string | undefined;
 
   if (shouldWriteInline(params.storage)) {
     const candidatePath = resolveDailyMemoryPath(params.workspaceDir, nowMs, params.timezone);
-    const original = await readWorkspaceText(params.workspaceDir, candidatePath).catch(
-      (err: unknown) => {
-        if (extractErrorCode(err) === "ENOENT") {
-          return undefined;
-        }
-        throw err;
-      },
-    );
+    const markers = resolvePhaseMarkers(params.phase);
     // An existing empty file still owns its managed block; absence does not.
-    if (params.hasContent || original !== undefined) {
+    // The managed updater performs the bounded existence check itself, so no
+    // unbounded pre-read of the daily file happens here.
+    const wrote = await updateManagedDreamingMarkdownFile({
+      filePath: candidatePath,
+      workspaceDir: params.workspaceDir,
+      heading: DAILY_PHASE_HEADINGS[params.phase],
+      startMarker: markers.start,
+      endMarker: markers.end,
+      body,
+      tempPrefix: `${path.basename(candidatePath)}.dreaming`,
+      allowSymlink: true,
+      creationMode: DEFAULT_DAILY_MEMORY_FILE_MODE,
+      skipWhenAbsent: !hasContent,
+    });
+    if (wrote) {
       inlinePath = candidatePath;
-      const markers = resolvePhaseMarkers(params.phase);
-      const updated = replaceManagedMarkdownBlock({
-        original: original ?? "",
-        heading: DAILY_PHASE_HEADINGS[params.phase],
-        startMarker: markers.start,
-        endMarker: markers.end,
-        body,
-      });
-      await replaceDreamingMarkdownFile(
-        inlinePath,
-        withTrailingNewline(updated),
-        params.workspaceDir,
-      );
     }
   }
 
-  if (params.hasContent && shouldWriteSeparate(params.storage)) {
+  if (hasContent && shouldWriteSeparate(params.storage)) {
     reportPath = resolveSeparateReportPath(
       params.workspaceDir,
       params.phase,
@@ -164,21 +155,22 @@ export async function writeDailyDreamingPhaseBlock(params: {
 export async function writeDeepDreamingReport(params: {
   workspaceDir: string;
   bodyLines: string[];
-  hasContent: boolean;
+  hasContent?: boolean;
   nowMs?: number;
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
 }): Promise<string | undefined> {
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
-  const inlinePath = params.hasContent
+  const hasContent = params.hasContent ?? true;
+  const inlinePath = hasContent
     ? await updateDeepDreamsFile({
         workspaceDir: params.workspaceDir,
         bodyLines: params.bodyLines,
       })
     : undefined;
   let reportPath: string | undefined;
-  if (params.hasContent && shouldWriteSeparate(params.storage)) {
+  if (hasContent && shouldWriteSeparate(params.storage)) {
     reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
     await replaceDreamingMarkdownFile(reportPath, `# Deep Sleep\n\n${body}\n`, params.workspaceDir);
   }

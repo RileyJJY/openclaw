@@ -6,13 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendNarrativeEntry,
   dedupeDreamDiaryEntries,
-  readDreamsFile,
   readRecentDreamDiaryEntries,
   removeBackfillDiaryEntries,
-  updateDeepDreamsFile,
-  updateDreamsFile,
   writeBackfillDiaryEntries,
-} from "./dreaming-dreams-file.js";
+} from "./dreaming-diary-file.js";
+import { readDreamsFile, updateDeepDreamsFile, updateDreamsFile } from "./dreaming-dreams-file.js";
 import {
   SHORT_TERM_LOCK_MAX_ENTRIES,
   SHORT_TERM_LOCK_NAMESPACE,
