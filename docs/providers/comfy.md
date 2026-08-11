@@ -218,6 +218,7 @@ Comfy supports shared top-level connection settings plus per-capability workflow
 | `apiKey`              | string or SecretRef    | Optional cloud key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars.  |
 | `allowPrivateNetwork` | boolean                | Allow a private/LAN `baseUrl` in cloud mode or a local private-DNS FQDN.              |
 | `headers`             | object                 | Extra request headers; each value accepts a string or SecretRef.                      |
+| `workflowFileMaxBytes` | integer                | Optional maximum `workflowPath` file size in bytes. When unset, existing `workflowPath` behavior is preserved and files of any size are read. |
 
 Use `headers.Authorization` for a ComfyUI instance behind HTTP authentication.
 Prefer a [secret reference](/gateway/configuration-reference#secrets) for credentials.
@@ -229,6 +230,23 @@ redacted from response errors.
 
 <Note>
 In `local` mode, loopback/private IP literals and single-label service names such as `http://comfyui:8188` work without `allowPrivateNetwork`. Public-looking private-DNS FQDNs such as `https://comfy.local.example.com` require `allowPrivateNetwork: true`. Private-origin trust stays scoped to the configured scheme, hostname, and port; local redirects cannot leave the configured hostname, while cloud redirects to public CDNs are checked with the default SSRF policy.
+</Note>
+
+<Note>
+`workflowPath` reads are bounded only when `workflowFileMaxBytes` is set in
+your active Comfy configuration root:
+`plugins.entries.comfy.config` for plugin configurations, or
+`models.providers.comfy` for legacy provider configurations. The limit then
+applies to image, video, and music workflows in local and cloud mode. When the
+setting is absent, existing `workflowPath` behavior is preserved. If your
+workflow settings live under the legacy `models.providers.comfy` root, set the
+limit there as well; do not add a `plugins.entries.comfy.config` record only
+to set this limit, because a plugin record takes precedence and masks your
+existing legacy workflow settings. For local ComfyUI, also set
+`--max-upload-size` high enough for the final serialized request, including
+wrapper overhead. Comfy Cloud controls its own request limit and may still
+reject a larger workflow. OpenClaw rejects files above a configured local
+limit before sending a request.
 </Note>
 
 ### Per-capability keys
