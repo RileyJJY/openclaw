@@ -1,5 +1,9 @@
+// Comfy tests cover image generation provider plugin behavior.
 import type { LookupAddress } from "node:dns";
+import { truncate, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildComfyConfig,
@@ -17,6 +21,9 @@ vi.mock("node:crypto", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:crypto")>();
   return { ...actual, randomInt: randomIntMock.mockImplementation(actual.randomInt) };
 });
+const PREVIOUS_COMFY_WORKFLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
+// Matches ComfyUI's default --max-upload-size; used as the opt-in cap fixture.
+const DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES = 100 * 1024 * 1024;
 
 type FetchWithSsrFGuard = (typeof import("openclaw/plugin-sdk/ssrf-runtime"))["fetchWithSsrFGuard"];
 
@@ -214,12 +221,80 @@ describe("comfy image-generation provider", () => {
     vi.restoreAllMocks();
   });
 
+  it("treats local comfy workflows as configured without an API key", async () => {
+    const provider = comfyProviders.image;
+    expect(
+      await provider.isConfiguredAsync?.({
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+          },
+          promptNodeId: "6",
+        }),
+      }),
+    ).toBe(true);
+  });
+
+  it("detects workflow fields on a directly constructed legacy provider config", async () => {
+    const provider = comfyProviders.image;
+    expect(
+      await provider.isConfiguredAsync?.({
+        cfg: buildLegacyComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+          },
+          promptNodeId: "6",
+        }),
+      }),
+    ).toBe(true);
+  });
+
   it("falls back to legacy models.providers comfy config when plugin config is absent", async () => {
     expect(
       await comfyProviders.image.isConfiguredAsync?.({
         cfg: buildLegacyComfyConfig({
           workflow: { "6": { inputs: { text: "" } } },
           promptNodeId: "6",
+        }),
+      }),
+    ).toBe(true);
+  });
+
+  it("does not merge a partial plugin config with a legacy Comfy workflow", async () => {
+    const cfg = Object.assign(
+      buildComfyConfig({
+        workflowFileMaxBytes: DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES,
+      }),
+      {
+        models: {
+          providers: {
+            comfy: {
+              workflow: {
+                "6": { inputs: { text: "" } },
+              },
+              promptNodeId: "6",
+            },
+          },
+        },
+      },
+    );
+
+    expect(await comfyProviders.image.isConfiguredAsync?.({ cfg })).toBe(false);
+  });
+
+  it("treats cloud comfy workflows as configured with a plugin config API key", async () => {
+    const provider = comfyProviders.image;
+    expect(
+      await provider.isConfiguredAsync?.({
+        cfg: buildComfyConfig({
+          mode: "cloud",
+          apiKey: "comfy-test-key",
+          image: {
+            workflow: {
+              "6": { inputs: { text: "" } },
+            },
+            promptNodeId: "6",
+          },
         }),
       }),
     ).toBe(true);
@@ -312,6 +387,136 @@ describe("comfy image-generation provider", () => {
       prompt: { "4": { inputs: { noise_seed: 2 ** 48 - 2 } } },
     });
     expect(cfg.plugins?.entries?.comfy?.config?.workflow).toEqual(workflow);
+  });
+
+  it("leaves the workflow's baked-in seed untouched when seedNodeId is not configured", async () => {
+    mockLocalImageResponses("no-seed-prompt-1");
+
+    const provider = comfyProviders.image;
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig({
+        workflow: {
+          "4": { inputs: { seed: 12345 } },
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    expect(parseJsonBody(1)).toMatchObject({
+      prompt: { "4": { inputs: { seed: 12345 } } },
+    });
+  });
+
+  it("submits a local workflow loaded from workflowPath", async () => {
+    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
+      const workflowPath = path.join(tempRoot, "workflow.json");
+      await writeFile(
+        workflowPath,
+        JSON.stringify({
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        }),
+        "utf8",
+      );
+      mockLocalImageResponses("workflow-path-prompt-1");
+
+      const provider = comfyProviders.image;
+      const result = await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a workflow file",
+        cfg: buildComfyConfig({
+          workflow: undefined,
+          workflowPath,
+          promptNodeId: "6",
+          outputNodeId: "9",
+        }),
+      });
+
+      expect(parseJsonBody(1)).toEqual({
+        prompt: {
+          "6": { inputs: { text: "draw a workflow file" } },
+          "9": { inputs: {} },
+        },
+      });
+      expect(result.metadata?.promptId).toBe("workflow-path-prompt-1");
+    });
+  });
+
+  it("submits parseable workflow JSON larger than the previous 16 MiB boundary", async () => {
+    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
+      const workflowPath = path.join(tempRoot, "large-workflow.json");
+      await writeFile(
+        workflowPath,
+        JSON.stringify({
+          "6": {
+            class_type: "CLIPTextEncode",
+            inputs: { text: "" },
+            _meta: { title: "x".repeat(PREVIOUS_COMFY_WORKFLOW_FILE_MAX_BYTES) },
+          },
+          "9": { class_type: "SaveImage", inputs: {} },
+        }),
+        "utf8",
+      );
+      mockLocalImageResponses("large-workflow-path-prompt-1");
+
+      const provider = comfyProviders.image;
+      const result = await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a large workflow file",
+        cfg: buildComfyConfig({
+          workflowFileMaxBytes: DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES,
+          image: {
+            workflowPath,
+            promptNodeId: "6",
+            outputNodeId: "9",
+          },
+        }),
+      });
+
+      expect(result.metadata?.promptId).toBe("large-workflow-path-prompt-1");
+      expect(parseJsonBody(1)).toMatchObject({
+        prompt: {
+          "6": {
+            class_type: "CLIPTextEncode",
+            inputs: { text: "draw a large workflow file" },
+          },
+          "9": { class_type: "SaveImage", inputs: {} },
+        },
+      });
+    });
+  });
+
+  it("rejects oversized local workflowPath files before Comfy HTTP calls", async () => {
+    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
+      const workflowPath = path.join(tempRoot, "oversized-workflow.json");
+      await writeFile(workflowPath, "", "utf8");
+      await truncate(workflowPath, DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES + 1);
+
+      const provider = comfyProviders.image;
+      await expect(
+        provider.generateImage({
+          provider: "comfy",
+          model: "workflow",
+          prompt: "draw an oversized workflow file",
+          cfg: buildComfyConfig({
+            workflowFileMaxBytes: DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES,
+            workflow: undefined,
+            workflowPath,
+            promptNodeId: "6",
+            outputNodeId: "9",
+          }),
+        }),
+      ).rejects.toThrow(`exceeds ${DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES} bytes`);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    });
   });
 
   it.each([

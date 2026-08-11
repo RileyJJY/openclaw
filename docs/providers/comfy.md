@@ -246,13 +246,14 @@ Comfy supports shared top-level connection settings plus per-capability workflow
 
 ### Shared keys
 
-| Key                   | Type                   | Description                                                                           |
-| --------------------- | ---------------------- | ------------------------------------------------------------------------------------- |
-| `mode`                | `"local"` or `"cloud"` | Connection mode. Defaults to `"local"`.                                               |
-| `baseUrl`             | string                 | Defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud. |
-| `apiKey`              | string or SecretRef    | Optional cloud key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars.  |
-| `allowPrivateNetwork` | boolean                | Allow a private/LAN `baseUrl` in cloud mode or a local private-DNS FQDN.              |
-| `headers`             | object                 | Extra request headers; each value accepts a string or SecretRef.                      |
+| Key                    | Type                   | Description                                                                                                                                   |
+| ---------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                 | `"local"` or `"cloud"` | Connection mode. Defaults to `"local"`.                                                                                                       |
+| `baseUrl`              | string                 | Defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud.                                                         |
+| `apiKey`               | string or SecretRef    | Optional cloud key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars.                                                          |
+| `allowPrivateNetwork`  | boolean                | Allow a private/LAN `baseUrl` in cloud mode or a local private-DNS FQDN.                                                                      |
+| `headers`              | object                 | Extra request headers; each value accepts a string or SecretRef.                                                                              |
+| `workflowFileMaxBytes` | integer                | Optional maximum `workflowPath` file size in bytes. When unset, existing `workflowPath` behavior is preserved and files of any size are read. |
 
 Use `headers.Authorization` for a ComfyUI instance behind HTTP authentication.
 Prefer a [secret reference](/gateway/config-secrets-env#secrets) for credentials.
@@ -264,6 +265,63 @@ redacted from response errors.
 
 <Note>
 In `local` mode, loopback/private IP literals and single-label service names such as `http://comfyui:8188` work without `allowPrivateNetwork`. Public-looking private-DNS FQDNs such as `https://comfy.local.example.com` require `allowPrivateNetwork: true`. Private-origin trust stays scoped to the configured scheme, hostname, and port; local redirects cannot leave the configured hostname, while cloud redirects to public CDNs are checked with the default SSRF policy.
+</Note>
+
+<Note>
+`workflowPath` reads are bounded only when `workflowFileMaxBytes` is set in
+the plugin configuration root `plugins.entries.comfy.config`. The limit then
+applies to image, video, and music workflows in local and cloud mode. When the
+setting is absent, existing `workflowPath` behavior is preserved. For local
+ComfyUI, also set
+`--max-upload-size` high enough for the final serialized request, including
+wrapper overhead. Comfy Cloud controls its own request limit and may still
+reject a larger workflow. OpenClaw rejects files above a configured local
+limit before sending a request.
+</Note>
+
+<Note>
+When configuring workflow runs, keep connection settings such as `mode`,
+`baseUrl`, `allowPrivateNetwork`, and `headers` at the root of
+`plugins.entries.comfy.config`, alongside the `image`, `video`, and `music`
+sections. The workflow plugin treats this as a complete configuration source;
+it does not merge `baseUrl` or HTTP headers from `models.providers.comfy`.
+
+For example, configure a local endpoint and an HTTP authentication header at
+the plugin root:
+
+```json5
+{
+  plugins: {
+    entries: {
+      comfy: {
+        config: {
+          mode: "local",
+          baseUrl: "http://comfyui:8188",
+          headers: {
+            Authorization: {
+              source: "env",
+              provider: "default",
+              id: "COMFY_AUTHORIZATION",
+            },
+          },
+          image: {
+            workflowPath: "./workflows/flux-api.json",
+            promptNodeId: "6",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+For Cloud authentication, `plugins.entries.comfy.config.apiKey` takes
+precedence. If it is absent, the workflow plugin uses the registered Comfy
+provider's standard API-key auth profile, including `COMFY_API_KEY` or
+`COMFY_CLOUD_API_KEY`. This fallback supplies only the Cloud API key; it does
+not provide `baseUrl` or custom HTTP headers. Keep workflow keys—including
+`workflow`, `workflowPath`, `promptNodeId`, and the capability sections—out of
+`models.providers.comfy`, where the core config schema rejects them.
 </Note>
 
 ### Per-capability keys
