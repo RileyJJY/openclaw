@@ -136,6 +136,17 @@ async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promi
   });
 }
 
+async function syncParentDirectory(directoryPath: string): Promise<void> {
+  // Mirror replaceFileAtomic's syncParentDir guarantee: fsync the parent
+  // directory after a rename so the directory entry is durable on crash.
+  const dirHandle = await fs.open(directoryPath, "r");
+  try {
+    await dirHandle.sync();
+  } finally {
+    await dirHandle.close();
+  }
+}
+
 function buildManagedMarkdownBlock(params: ManagedMarkdownUpdateParams): string {
   return `${params.heading}\n${params.startMarker}\n${params.body}\n${params.endMarker}`;
 }
@@ -373,9 +384,14 @@ async function replaceManagedMarkdownBlockStreaming(
     } else if (!outputEndsWithLf) {
       await writeChunk("\n");
     }
+    await output.sync();
     await output.close();
     output = undefined;
+    // Mirror replaceFileAtomic's syncTempFile + syncParentDir protocol: the
+    // rewritten bytes are fsynced above, and the rename is made durable by
+    // fsyncing the parent directory before the temporary dir is removed.
     await fs.rename(tempPath, params.filePath);
+    await syncParentDirectory(path.dirname(params.filePath));
   } catch (err) {
     await input?.close().catch(() => undefined);
     await output?.close().catch(() => undefined);
@@ -415,6 +431,8 @@ export async function updateManagedDreamingMarkdownFile(
       mode: resolvedParams.creationMode ?? 0o600,
       preserveExistingMode: true,
       tempPrefix: resolvedParams.tempPrefix,
+      syncTempFile: true,
+      syncParentDir: true,
       throwOnCleanupError: true,
     });
     return;

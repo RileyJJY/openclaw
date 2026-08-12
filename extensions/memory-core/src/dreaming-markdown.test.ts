@@ -217,6 +217,84 @@ describe("dreaming markdown storage", () => {
     expect(content).not.toContain("- Old candidate");
   });
 
+  it("commits oversized streaming replacements through the durable sync protocol", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    const startMarker = "<!-- openclaw:dreaming:light:start -->";
+    const endMarker = "<!-- openclaw:dreaming:light:end -->";
+    const body = "- Candidate: durable streaming update";
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    await fs.writeFile(
+      inlinePath,
+      [
+        "# Daily Memory",
+        "",
+        "A".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+        "",
+        "## Light Sleep",
+        startMarker,
+        "- Old candidate",
+        endMarker,
+        "Tail stays.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    // Track every FileHandle.sync call alongside the path that opened it so
+    // the streaming commit can be proven to fsync both the temp file and the
+    // parent directory, mirroring replaceFileAtomic's syncTempFile +
+    // syncParentDir protocol used by the current daily-memory writer.
+    const syncedPaths: string[] = [];
+    const originalOpen = fs.open;
+    const openSpy = vi
+      .spyOn(fs, "open")
+      .mockImplementation(
+        async (
+          openPath: Parameters<typeof fs.open>[0],
+          ...rest: Parameters<typeof fs.open>[1][]
+        ) => {
+          const handle = await originalOpen(openPath, ...rest);
+          const rawSync = handle.sync.bind(handle);
+          handle.sync = async () => {
+            syncedPaths.push(String(openPath));
+            return await rawSync();
+          };
+          return handle;
+        },
+      );
+
+    try {
+      await writeDailyDreamingPhaseBlock({
+        workspaceDir,
+        phase: "light",
+        bodyLines: [body],
+        nowMs,
+        timezone,
+        storage: {
+          mode: "inline",
+          separateReports: false,
+        },
+      });
+
+      const parentDir = path.dirname(inlinePath);
+      const tempSynced = syncedPaths.filter(
+        (syncedPath) =>
+          syncedPath !== inlinePath &&
+          syncedPath !== parentDir &&
+          path.dirname(syncedPath).startsWith(`${parentDir}${path.sep}`),
+      );
+      expect(tempSynced.length).toBeGreaterThan(0);
+      expect(syncedPaths).toContain(parentDir);
+
+      const content = await fs.readFile(inlinePath, "utf-8");
+      expect(content).toContain(body);
+      expect(content).not.toContain("- Old candidate");
+      expect(content).toContain("Tail stays.");
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it("preserves canonical replacement with an unbounded heading separator", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
     const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
