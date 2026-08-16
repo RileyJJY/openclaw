@@ -712,7 +712,9 @@ describe("comfy image-generation provider", () => {
           );
           await Promise.race([
             read.catch(() => undefined),
-            new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+            new Promise<void>((resolve) => {
+              setTimeout(resolve, 2_000);
+            }),
           ]);
           writer.kill("SIGKILL");
         }
