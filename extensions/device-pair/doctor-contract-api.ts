@@ -2,6 +2,7 @@
 import path from "node:path";
 import {
   defineLegacyJsonStateMigration,
+  LEGACY_JSON_MIGRATION_MAX_BYTES,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
@@ -29,6 +30,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       warning: ({ available, missing }) =>
         `Skipped Device Pair notify subscriber migration because plugin state has room for ${available} of ${missing} missing entries; left legacy source in place`,
     },
+    maxBytes: LEGACY_JSON_MIGRATION_MAX_BYTES,
     archiveLabel: "Device Pair notify-state",
     describeEntries: (state, { filePath }) => ({
       preview: [
