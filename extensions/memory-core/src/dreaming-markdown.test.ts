@@ -86,7 +86,7 @@ describe("dreaming markdown storage", () => {
     });
 
     const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
-    const expectedMode = 0o666 & ~process.umask();
+    const expectedMode = 0o600;
     expect((await fs.stat(inlinePath)).mode & 0o777).toBe(expectedMode);
   });
 

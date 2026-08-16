@@ -20,7 +20,7 @@ const DAILY_PHASE_LABELS: Record<Exclude<MemoryDreamingPhaseName, "deep">, strin
   light: "light",
   rem: "rem",
 };
-const DEFAULT_DAILY_MEMORY_FILE_MODE = 0o666 & ~process.umask();
+const DEFAULT_DAILY_MEMORY_FILE_MODE = 0o600;
 
 function resolvePhaseMarkers(phase: Exclude<MemoryDreamingPhaseName, "deep">): {
   start: string;
