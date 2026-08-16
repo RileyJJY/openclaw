@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import type { LookupAddress } from "node:dns";
 import { readFile, truncate, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -639,6 +640,38 @@ describe("comfy image-generation provider", () => {
           }),
         }),
       ).rejects.toThrow(`exceeds ${DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES} bytes`);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("gives legacy Comfy configs migration-safe overflow guidance", async () => {
+    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
+      const workflowPath = path.join(tempRoot, "legacy-oversized-workflow.json");
+      await writeFile(workflowPath, "", "utf8");
+      await truncate(workflowPath, DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES + 1);
+
+      const provider = buildComfyImageGenerationProvider();
+      await expect(
+        provider.generateImage({
+          provider: "comfy",
+          model: "workflow",
+          prompt: "draw an oversized legacy workflow file",
+          cfg: {
+            models: {
+              providers: {
+                comfy: {
+                  workflowFileMaxBytes: DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES,
+                  workflowPath,
+                  promptNodeId: "6",
+                  outputNodeId: "9",
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+        }),
+      ).rejects.toThrow(
+        /migrate the complete models\.providers\.comfy configuration to plugins\.entries\.comfy\.config.*partial plugin config takes precedence/i,
+      );
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     });
   });
