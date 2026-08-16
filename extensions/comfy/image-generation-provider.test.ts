@@ -1,4 +1,5 @@
 // Comfy tests cover image generation provider plugin behavior.
+import { spawn, spawnSync } from "node:child_process";
 import type { LookupAddress } from "node:dns";
 import { readFile, truncate, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -680,6 +681,49 @@ describe("comfy image-generation provider", () => {
       );
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects FIFO workflowPath files without waiting for a writer",
+    async () => {
+      await withTempDir("openclaw-comfy-workflow-fifo-", async (tempRoot) => {
+        const workflowPath = path.join(tempRoot, "workflow.pipe");
+        expect(spawnSync("mkfifo", [workflowPath]).status).toBe(0);
+
+        const read = readComfyWorkflowFile(workflowPath, DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES);
+        let timer: NodeJS.Timeout | undefined;
+        const outcome = await Promise.race([
+          read.then(
+            () => ({ kind: "resolved" as const }),
+            (error: unknown) => ({ kind: "rejected" as const, error }),
+          ),
+          new Promise<{ kind: "timeout" }>((resolve) => {
+            timer = setTimeout(() => resolve({ kind: "timeout" }), 1_000);
+          }),
+        ]);
+        if (timer) {
+          clearTimeout(timer);
+        }
+
+        if (outcome.kind === "timeout") {
+          const writer = spawn(
+            "/bin/sh",
+            ["-c", 'printf x > "$1"', "openclaw-comfy-workflow-fifo", workflowPath],
+            { stdio: "ignore" },
+          );
+          await Promise.race([
+            read.catch(() => undefined),
+            new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+          ]);
+          writer.kill("SIGKILL");
+        }
+
+        expect(outcome).toMatchObject({
+          kind: "rejected",
+          error: { message: expect.stringMatching(/regular file/i) },
+        });
+      });
+    },
+  );
 
   it("honors local private-network access for service-discovery hostnames", async () => {
     mockLocalImageResponses("compose-prompt-1");
