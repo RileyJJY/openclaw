@@ -7,9 +7,10 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type {
-  OpenKeyedStoreOptions,
-  PluginDoctorStateMigrationContext,
+import {
+  LEGACY_JSON_MIGRATION_MAX_BYTES,
+  type OpenKeyedStoreOptions,
+  type PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
@@ -223,5 +224,42 @@ describe("device-pair doctor notify migration", () => {
       warnings: [],
     });
     await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+  });
+
+  it("keeps an oversized legacy notify source without buffering or archiving it", async () => {
+    const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
+    const subscriber: NotifySubscription = {
+      to: "chat-oversized",
+      accountId: "telegram-default",
+      mode: "persistent",
+      addedAtMs: 1,
+    };
+    const payload = JSON.stringify({
+      subscribers: [subscriber],
+      notifiedRequestIds: {},
+      padding: "x".repeat(LEGACY_JSON_MIGRATION_MAX_BYTES),
+    });
+    expect(Buffer.byteLength(payload, "utf8")).toBeGreaterThan(LEGACY_JSON_MIGRATION_MAX_BYTES);
+    await fs.writeFile(sourcePath, payload, "utf8");
+
+    const migration = expectDefined(stateMigrations[0], "device-pair state migration");
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toMatchObject({
+      preview: [expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_MAX_BYTES} bytes`)],
+    });
+
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_MAX_BYTES} bytes`)],
+    });
+    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+    await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
+    await expect(
+      createDoctorContext(env)
+        .openPluginStateKeyedStore<NotifySubscription>({
+          namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+          maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
+        })
+        .entries(),
+    ).resolves.toEqual([]);
   });
 });
