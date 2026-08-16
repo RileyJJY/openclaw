@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   LEGACY_JSON_MIGRATION_MAX_BYTES,
+  LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES,
   type OpenKeyedStoreOptions,
   type PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
@@ -226,11 +227,12 @@ describe("device-pair doctor notify migration", () => {
     await expect(fs.access(sourcePath)).resolves.toBeUndefined();
   });
 
-  it("keeps an oversized legacy notify source without buffering or archiving it", async () => {
+  it("recovers subscribers from a legacy notify source above the fast read cap", async () => {
     const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
     const subscriber: NotifySubscription = {
       to: "chat-oversized",
       accountId: "telegram-default",
+      messageThreadId: 271,
       mode: "persistent",
       addedAtMs: 1,
     };
@@ -244,12 +246,44 @@ describe("device-pair doctor notify migration", () => {
 
     const migration = expectDefined(stateMigrations[0], "device-pair state migration");
     await expect(migration.detectLegacyState(migrationParams())).resolves.toMatchObject({
-      preview: [expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_MAX_BYTES} bytes`)],
+      preview: [expect.stringContaining("Device Pair notify subscribers")],
+    });
+
+    const result = await migration.migrateLegacyState(migrationParams());
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Device Pair notify subscribers -> plugin state (1 imported, 0 already present)",
+      expect.stringContaining("Archived Device Pair notify-state legacy source"),
+    ]);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
+    await expect(
+      createDoctorContext(env)
+        .openPluginStateKeyedStore<NotifySubscription>({
+          namespace: DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+          maxEntries: DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
+        })
+        .lookup(notifySubscriberStoreKey(subscriber)),
+    ).resolves.toEqual(subscriber);
+  });
+
+  it("keeps an unprocessable notify source above the recovery budget", async () => {
+    const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
+    await fs.writeFile(sourcePath, "", "utf8");
+    await fs.truncate(sourcePath, LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES + 1);
+
+    const migration = expectDefined(stateMigrations[0], "device-pair state migration");
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toMatchObject({
+      preview: [
+        expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES} bytes`),
+      ],
     });
 
     await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
       changes: [],
-      warnings: [expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_MAX_BYTES} bytes`)],
+      warnings: [
+        expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES} bytes`),
+      ],
     });
     await expect(fs.access(sourcePath)).resolves.toBeUndefined();
     await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
