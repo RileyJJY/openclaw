@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
 import {
   buildComfyConfig,
-  buildLegacyComfyConfig,
   mockComfyCloudJobResponses,
   mockComfyProviderApiKey,
   parseComfyJsonBody,
@@ -273,20 +272,6 @@ describe("comfy image-generation provider", () => {
     expect(
       provider.isConfigured?.({
         cfg: buildComfyConfig({
-          workflow: {
-            "6": { inputs: { text: "" } },
-          },
-          promptNodeId: "6",
-        }),
-      }),
-    ).toBe(true);
-  });
-
-  it("falls back to legacy models.providers comfy config when plugin config is absent", () => {
-    const provider = buildComfyImageGenerationProvider();
-    expect(
-      provider.isConfigured?.({
-        cfg: buildLegacyComfyConfig({
           workflow: {
             "6": { inputs: { text: "" } },
           },
@@ -693,33 +678,6 @@ describe("comfy image-generation provider", () => {
       await expect(readComfyWorkflowFile(workflowPath, undefined)).resolves.toBe(
         await readFile(workflowPath, "utf8"),
       );
-    });
-  });
-
-  it("honors the shared workflowFileMaxBytes setting for legacy config", async () => {
-    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
-      const workflowPath = path.join(tempRoot, "legacy-workflow.json");
-      const workflow = JSON.stringify({
-        "6": { inputs: { text: "" } },
-        "9": { inputs: {} },
-      });
-      await writeFile(workflowPath, workflow, "utf8");
-
-      const provider = buildComfyImageGenerationProvider();
-      await expect(
-        provider.generateImage({
-          provider: "comfy",
-          model: "workflow",
-          prompt: "draw a legacy workflow file",
-          cfg: buildLegacyComfyConfig({
-            workflowPath,
-            workflowFileMaxBytes: Buffer.byteLength(workflow) - 1,
-            promptNodeId: "6",
-            outputNodeId: "9",
-          }),
-        }),
-      ).rejects.toThrow(/models\.providers\.comfy/);
-      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     });
   });
 
