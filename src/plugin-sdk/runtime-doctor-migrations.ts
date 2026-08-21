@@ -427,15 +427,25 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
     | { kind: "oversized"; maxBytes: number }
     | { kind: "unavailable" };
 
-  const maxBytes = params.maxBytes ?? LEGACY_JSON_MIGRATION_MAX_BYTES;
+  // Preserve the historical unbounded read for callers that do not opt into
+  // a migration-specific limit. Bundled migrations pass explicit limits when
+  // they need bounded recovery.
+  const maxBytes = params.maxBytes;
 
-  const readSource = async (filePath: string, limit: number): Promise<ReadSourceResult> => {
+  const readSource = async (
+    filePath: string,
+    limit: number | undefined,
+  ): Promise<ReadSourceResult> => {
     try {
       const { buffer } = await readRegularFile({ filePath, maxBytes: limit });
       const source = params.parse(JSON.parse(buffer.toString("utf8")) as unknown);
       return source === null ? { kind: "unavailable" } : { kind: "loaded", source };
     } catch (err) {
-      if (err instanceof Error && err.message.startsWith(`File exceeds ${limit} bytes`)) {
+      if (
+        limit !== undefined &&
+        err instanceof Error &&
+        err.message.startsWith(`File exceeds ${limit} bytes`)
+      ) {
         return { kind: "oversized", maxBytes: limit };
       }
       return { kind: "unavailable" };
