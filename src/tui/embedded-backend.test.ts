@@ -2591,6 +2591,51 @@ describe("EmbeddedTuiBackend", () => {
     },
   );
 
+  it("allows a same-run success to supersede a provisional error after the retry grace", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string; mediaUrl: null }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "recover after retry grace",
+      runId: "late-success",
+    });
+
+    emitRegisteredAgentEvent({
+      runId: "late-success",
+      stream: "lifecycle",
+      data: { phase: "error", endedAt: 1_000, error: "retryable provider failure" },
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    const terminalStates = () =>
+      events
+        .filter(
+          ({ event, payload }) =>
+            event === "chat" &&
+            ["error", "final"].includes((payload as { state?: unknown }).state as string),
+        )
+        .map(({ payload }) => (payload as { state: string }).state);
+    expect(terminalStates()).toEqual(["error"]);
+
+    emitRegisteredAgentEvent({
+      runId: "late-success",
+      stream: "lifecycle",
+      data: { phase: "end", endedAt: 16_000 },
+    });
+    expect(terminalStates()).toEqual(["error", "final"]);
+
+    pending.resolve({ payloads: [{ text: "recovered", mediaUrl: null }], meta: {} });
+    await flushMicrotasks();
+    await backend.stop();
+  });
+
   it.each([
     {
       label: "a provider timeout",

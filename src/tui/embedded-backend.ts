@@ -136,6 +136,7 @@ type LocalRunState = {
   lifecycleYielded?: boolean;
   toolErrorSummary?: string;
   finalSent: boolean;
+  provisionalTerminalError: boolean;
   registered: boolean;
   pendingQueue?: {
     mode: "followup" | "collect";
@@ -543,6 +544,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       finishing: false,
       lifecycleEnded: false,
       finalSent: false,
+      provisionalTerminalError: false,
       registered: false,
       ...(pendingQueue ? { pendingQueue } : {}),
       ...(queuedAfter ? { queuedAfter } : {}),
@@ -1147,7 +1149,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.clearPendingLifecycleError(runId);
     const timer = setTimeout(() => {
       this.pendingLifecycleErrors.delete(runId);
-      this.emitChatTerminal(runId, run, "error", errorMessage);
+      this.emitChatTerminal(runId, run, "error", errorMessage, { provisional: true });
     }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
     timer.unref?.();
     this.pendingLifecycleErrors.set(runId, timer);
@@ -1183,16 +1185,21 @@ export class EmbeddedTuiBackend implements TuiBackend {
     run: LocalRunState,
     state: "final" | "aborted" | "error",
     detail?: string,
+    options?: { provisional?: boolean },
   ) {
     this.clearPendingLifecycleError(runId);
     run.markQueuedRunReady();
     const alreadyFinal = run.finalSent;
+    const reviseProvisionalError =
+      alreadyFinal && run.provisionalTerminalError && state === "final";
+    if (alreadyFinal && !reviseProvisionalError) {
+      run.provisionalTerminalError = false;
+      return;
+    }
     run.finishing = false;
     run.lifecycleEnded = true;
     run.finalSent = true;
-    if (alreadyFinal) {
-      return;
-    }
+    run.provisionalTerminalError = options?.provisional === true;
     run.registered = true;
     run.lastBroadcastText = undefined;
     const projected = projectLiveAssistantBufferedText(
@@ -1245,6 +1252,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       });
     const state = TUI_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(outcome)];
     if (!state) {
+      if (run.provisionalTerminalError && outcome.reason === "completed") {
+        this.emitChatTerminal(runId, run, "final", outcome.stopReason);
+        return true;
+      }
       return false;
     }
     const diagnostic =
@@ -1476,9 +1487,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
       if (!run) {
         return;
       }
+      const finalText = payloadText(result?.payloads);
+      if (finalText) {
+        run.buffer = finalText;
+      }
       if (
         this.projectTerminalOutcome(params.runId, run, result?.meta ?? {}, {
-          visibleText: payloadText(result?.payloads),
+          visibleText: finalText,
         })
       ) {
         return;
@@ -1501,12 +1516,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
 
-      if (!run.finalSent) {
-        const finalText = payloadText(result?.payloads);
+      if (!run.finalSent || run.provisionalTerminalError) {
         // A completed response is authoritative; keep the stream only when it has no final text.
-        if (finalText) {
-          run.buffer = finalText;
-        }
         const stopReason =
           run.lifecycleStopReason ??
           (typeof result?.meta?.stopReason === "string" ? result.meta.stopReason : undefined);

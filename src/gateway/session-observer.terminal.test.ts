@@ -472,6 +472,28 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(harness.persistDigest).toHaveBeenCalledOnce();
   });
 
+  it("allows a same-run success to supersede a provisional error after the retry grace", async () => {
+    useFakeTime();
+    const { harness } = createPersistedHarness();
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start", startedAt: 0 }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    harness.observer.handleEvent(
+      lifecycleEvent({ phase: "error", endedAt: 30_000, error: "retryable provider failure" }),
+    );
+    await advanceAndFlush(15_000);
+    expect(broadcastDigest(harness)).toMatchObject({ health: "failed" });
+
+    vi.setSystemTime(60_000);
+    await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 60_000 });
+
+    expect(observerBroadcasts(harness).map((call) => call[1])).toEqual([
+      expect.objectContaining({ health: "failed" }),
+      expect.objectContaining({ health: "done" }),
+    ]);
+    expect(harness.persistDigest).toHaveBeenCalledTimes(2);
+  });
+
   it("retries one transient terminal digest failure", async () => {
     useFakeTime();
     const completeModel = vi
