@@ -10,6 +10,8 @@ import {
 import {
   defineLegacyJsonStateMigration,
   definePluginDoctorMigrationFromPlans,
+  LEGACY_JSON_MIGRATION_MAX_BYTES,
+  type PluginDoctorStateMigration,
   type PluginDoctorStateMigrationContext,
 } from "./runtime-doctor-migrations.js";
 
@@ -159,5 +161,75 @@ describe("definePluginDoctorMigrationFromPlans", () => {
     });
 
     await expect(migration.detectLegacyState(migrationInput)).resolves.toBeNull();
+  });
+});
+
+type TestState = { value: string };
+
+function createJsonMigration(options: { maxBytes?: number } = {}): PluginDoctorStateMigration {
+  return defineLegacyJsonStateMigration<TestState>({
+    id: "runtime-doctor-json-migration-test",
+    label: "runtime doctor JSON test",
+    resolvePath: (dir) => path.join(dir, "legacy.json"),
+    parse: (value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+      }
+      const candidate = value as { value?: unknown };
+      return typeof candidate.value === "string" ? { value: candidate.value } : null;
+    },
+    namespace: "runtime-doctor-json-migration-test",
+    maxEntries: 1,
+    ...options,
+    describeEntries: () => ({
+      preview: ["loaded"],
+      change: () => null,
+    }),
+    toRows: (source) => [{ key: "state", value: source }],
+  });
+}
+
+function detectParams(stateDir: string, context: PluginDoctorStateMigrationContext) {
+  return {
+    config: {},
+    env: process.env,
+    stateDir,
+    oauthDir: path.join(stateDir, "oauth"),
+    context,
+  };
+}
+
+describe("defineLegacyJsonStateMigration", () => {
+  let stateDir = "";
+
+  beforeEach(async () => {
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-doctor-migration-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("preserves unbounded reads when maxBytes is omitted", async () => {
+    const sourcePath = path.join(stateDir, "legacy.json");
+    const payload = `${JSON.stringify({ value: "ok" })}${" ".repeat(LEGACY_JSON_MIGRATION_MAX_BYTES)}`;
+    await fs.writeFile(sourcePath, payload, "utf8");
+
+    const migration = createJsonMigration();
+    await expect(
+      migration.detectLegacyState(detectParams(stateDir, {} as PluginDoctorStateMigrationContext)),
+    ).resolves.toEqual({ preview: ["loaded"] });
+  });
+
+  it("honors an explicit maxBytes limit", async () => {
+    const sourcePath = path.join(stateDir, "legacy.json");
+    await fs.writeFile(sourcePath, JSON.stringify({ value: "x".repeat(256) }), "utf8");
+
+    const migration = createJsonMigration({ maxBytes: 128 });
+    await expect(
+      migration.detectLegacyState(detectParams(stateDir, {} as PluginDoctorStateMigrationContext)),
+    ).resolves.toEqual({
+      preview: [expect.stringContaining("exceeds 128 bytes")],
+    });
   });
 });
