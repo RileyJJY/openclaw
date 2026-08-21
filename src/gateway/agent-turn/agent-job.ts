@@ -295,7 +295,7 @@ function schedulePendingAgentRunTerminal(
     }
     const retainForActiveWaiter =
       pendingRuns === pendingAgentRunErrors &&
-      !isFailClosedAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pending.snapshot)) &&
+      terminalOutcomeFromSnapshot(pending.snapshot)?.reason === "failed" &&
       !pendingAgentRunTimeouts.has(snapshot.runId) &&
       hasAgentRunWaiters(snapshot.runId);
     if (retainForActiveWaiter) {

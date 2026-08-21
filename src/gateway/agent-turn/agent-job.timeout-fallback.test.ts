@@ -266,6 +266,12 @@ describe("waitForAgentJob timeout fallback", () => {
 
   it.each([
     ["hard provider timeout", { timeoutPhase: "provider" }, { status: "timeout" }],
+    ["timeout status", { status: "timeout" }, { status: "timeout" }],
+    [
+      "timeout stop reason",
+      { stopReason: "timeout" },
+      { status: "timeout", stopReason: "timeout" },
+    ],
     ["RPC cancellation", { stopReason: "rpc" }, { status: "error", stopReason: "rpc" }],
     ["blocked run", { livenessState: "blocked" }, { status: "error", livenessState: "blocked" }],
     [
