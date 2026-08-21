@@ -30,6 +30,16 @@ export function buildComfyConfig(config: Record<string, unknown>): OpenClawConfi
   } as unknown as OpenClawConfig;
 }
 
+export function buildLegacyComfyConfig(config: Record<string, unknown>): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        comfy: config,
+      },
+    },
+  } as unknown as OpenClawConfig;
+}
+
 export function parseComfyJsonBody(
   fetchWithSsrFGuardMock: FetchGuardMock,
   call: number,

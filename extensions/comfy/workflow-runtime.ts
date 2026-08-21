@@ -137,7 +137,8 @@ function getComfyConfigSource(cfg?: OpenClawConfig): ComfyConfigSource {
   if (isRecord(pluginConfig)) {
     return { config: pluginConfig };
   }
-  return { config: {} };
+  const legacyConfig = cfg?.models?.providers?.comfy;
+  return { config: isRecord(legacyConfig) ? legacyConfig : {} };
 }
 
 function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {

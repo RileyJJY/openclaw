@@ -244,6 +244,12 @@ reject a larger workflow. OpenClaw rejects files above a configured local
 limit before sending a request.
 </Note>
 
+<Note>
+Existing workflows configured under `models.providers.comfy` remain supported.
+This change does not retire that released configuration path; configure the
+new `workflowFileMaxBytes` setting under `plugins.entries.comfy.config`.
+</Note>
+
 ### Per-capability keys
 
 These keys apply inside the `image`, `video`, or `music` sections:

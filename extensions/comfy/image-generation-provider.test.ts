@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
 import {
   buildComfyConfig,
+  buildLegacyComfyConfig,
   mockComfyCloudJobResponses,
   mockComfyProviderApiKey,
   parseComfyJsonBody,
@@ -273,6 +274,20 @@ describe("comfy image-generation provider", () => {
     expect(
       provider.isConfigured?.({
         cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+          },
+          promptNodeId: "6",
+        }),
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps legacy models.providers comfy workflows configured", () => {
+    const provider = buildComfyImageGenerationProvider();
+    expect(
+      provider.isConfigured?.({
+        cfg: buildLegacyComfyConfig({
           workflow: {
             "6": { inputs: { text: "" } },
           },

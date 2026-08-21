@@ -2364,29 +2364,6 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects retired Comfy workflow settings under the model provider root", () => {
-    const res = validateInSuite({
-      agents: { list: [{ id: "openclaw" }] },
-      models: {
-        providers: {
-          comfy: {
-            workflowFileMaxBytes: 100 * 1024 * 1024,
-            workflowPath: "./workflow.json",
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: expect.stringContaining("models.providers.comfy") }),
-        ]),
-      );
-    }
-  });
-
   it("accepts voice-call OpenAI TTS speakerVoice, speed, instructions, and baseUrl fields", () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },
