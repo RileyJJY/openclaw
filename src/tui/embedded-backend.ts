@@ -1191,7 +1191,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     run.markQueuedRunReady();
     const alreadyFinal = run.finalSent;
     const reviseProvisionalError =
-      alreadyFinal && run.provisionalTerminalError && state === "final";
+      alreadyFinal && run.provisionalTerminalError && options?.provisional !== true;
     if (alreadyFinal && !reviseProvisionalError) {
       run.provisionalTerminalError = false;
       return;
@@ -1266,7 +1266,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           (outcome.status === "timeout"
             ? "The provider timed out. Please try again."
             : "Agent run failed.");
-    if (metadata.phase === "error" && state === "error") {
+    if (metadata.phase === "error" && state === "error" && outcome.reason === "failed") {
       this.scheduleChatError(runId, run, diagnostic);
     } else {
       this.emitChatTerminal(runId, run, state, diagnostic);

@@ -2638,6 +2638,80 @@ describe("EmbeddedTuiBackend", () => {
 
   it.each([
     {
+      label: "cancellation",
+      lifecycle: { phase: "end", aborted: true, stopReason: "aborted" },
+      expectedState: "aborted",
+    },
+    {
+      label: "hard timeout",
+      lifecycle: {
+        phase: "error",
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      expectedState: "error",
+    },
+    {
+      label: "blocked run",
+      lifecycle: { phase: "end", livenessState: "blocked" },
+      expectedState: "error",
+    },
+    {
+      label: "abandoned run",
+      lifecycle: { phase: "end", livenessState: "abandoned" },
+      expectedState: "error",
+    },
+  ])(
+    "allows a same-run authoritative $label to supersede a provisional error after the retry grace",
+    async ({ label, lifecycle, expectedState }) => {
+      const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+      const pending = deferred<{
+        payloads: Array<{ text: string; mediaUrl: null }>;
+        meta: Record<string, unknown>;
+      }>();
+      agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+      const backend = new EmbeddedTuiBackend();
+      const events: Array<{ event: string; payload: unknown }> = [];
+      backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+      backend.start();
+      const runId = `late-${label.replaceAll(" ", "-")}`;
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: `recover after retry grace with ${label}`,
+        runId,
+      });
+
+      emitRegisteredAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", endedAt: 1_000, error: "retryable provider failure" },
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const terminalStates = () =>
+        events
+          .filter(
+            ({ event, payload }) =>
+              event === "chat" &&
+              ["aborted", "error", "final"].includes(
+                (payload as { state?: unknown }).state as string,
+              ),
+          )
+          .map(({ payload }) => (payload as { state: string }).state);
+      expect(terminalStates()).toEqual(["error"]);
+
+      emitRegisteredAgentEvent({ runId, stream: "lifecycle", data: lifecycle });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(terminalStates()).toEqual(["error", expectedState]);
+
+      pending.resolve({ payloads: [{ text: "settled", mediaUrl: null }], meta: {} });
+      await flushMicrotasks();
+      await backend.stop();
+    },
+  );
+
+  it.each([
+    {
       label: "a provider timeout",
       meta: { stopReason: "timeout", timeoutPhase: "provider", providerStarted: true },
       diagnostic: "The provider timed out. Please try again.",
