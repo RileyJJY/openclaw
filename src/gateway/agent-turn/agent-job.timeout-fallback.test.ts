@@ -193,6 +193,35 @@ describe("waitForAgentJob timeout fallback", () => {
     });
   });
 
+  it("publishes a later lifecycle failure after an aborted end at retry grace", async () => {
+    const runId = `run-timeout-fallback-aborted-end-${runSequence++}`;
+    let terminalOutcome: Awaited<ReturnType<typeof waitForAgentJob>>;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 }).then((outcome) => {
+      terminalOutcome = outcome;
+      return outcome;
+    });
+
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 1_100, aborted: true },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "error", startedAt: 1_000, endedAt: 1_200, error: "final error" },
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(terminalOutcome).toMatchObject({
+      status: "error",
+      endedAt: 1_200,
+      error: "final error",
+    });
+    await expect(waitPromise).resolves.toMatchObject({ status: "error", endedAt: 1_200 });
+  });
+
   it.each([1, 2])(
     "keeps an active waiter open across %i expired retryable failure grace periods",
     async (failureCount) => {

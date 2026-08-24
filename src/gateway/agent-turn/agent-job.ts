@@ -254,6 +254,7 @@ function schedulePendingAgentRunTerminal(
     terminalSnapshot.version = snapshot.version;
     return;
   }
+  const replacesPendingTimeout = pendingAgentRunTimeouts.has(snapshot.runId);
   clearPendingAgentRunTerminals(snapshot.runId);
   const timer = setSafeTimeout(() => {
     const pending = pendingRuns.get(snapshot.runId);
@@ -262,6 +263,7 @@ function schedulePendingAgentRunTerminal(
     }
     if (
       pendingRuns === pendingAgentRunErrors &&
+      !replacesPendingTimeout &&
       terminalOutcomeFromSnapshot(pending.snapshot)?.reason === "failed" &&
       agentRunWaiters.has(snapshot.runId)
     ) {
