@@ -1,6 +1,10 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import {
+  AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
+  isDefinitiveRunLifecycle,
+} from "../agents/agent-run-terminal-outcome.js";
+import {
   createSessionActivityNoteState,
   flushSessionActivityAssistantNote,
   noteSessionActivityEvent,
@@ -34,7 +38,6 @@ import type {
 } from "./session-observer-model.js";
 import { createSessionObserverDigestPersister } from "./session-observer-persistence.js";
 import { createSessionObserverPreamblePublisher } from "./session-observer-preamble.js";
-import { createSessionObserverTerminalRunTracker } from "./session-observer-terminal-runs.js";
 import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
 const observerLog = createSubsystemLogger("gateway/session-observer");
@@ -63,14 +66,15 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const revisionFloors = new Map<string, SessionObserverRevisionFloor>();
   const supersededRuns = new Map<string, number>();
   const contextlessTerminalRuns = new Map<string, number>();
+  const terminalRuns = new Map<string, number>();
+  const pendingTerminalErrors = new Map<string, ReturnType<typeof setTimeout>>();
   const disabledRuns = new Set<string>();
   const visibleConnections = new Set<string>();
   let disposed = false;
-  const terminalRuns = createSessionObserverTerminalRunTracker({
-    setTimeoutFn,
-    clearTimeoutFn,
-    onRetryableError: (event) => handleEvent(event, true),
-  });
+  const clearPendingTerminalError = (runId: string) => {
+    clearTimeoutFn(pendingTerminalErrors.get(runId));
+    pendingTerminalErrors.delete(runId);
+  };
   const getCompanionSnapshot = createSessionObserverCompanionSnapshotReader({
     getConfig: deps.getConfig,
     readSession,
@@ -175,15 +179,30 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     modelSlots.invalidateRequest(state);
     if (stateIsTracked(state)) {
-      states.delete(resolveSessionSubscriptionKey(state.sessionKey, state.agentId));
+      const scopeKey = resolveSessionSubscriptionKey(state.sessionKey, state.agentId);
+      if (
+        state.terminalHealth === "failed" &&
+        !terminalRuns.has(state.runId) &&
+        state.previousDigest
+      ) {
+        rememberSessionObserverRevisionFloor(revisionFloors, scopeKey, {
+          revision: state.revision,
+          previousDigest: state.previousDigest,
+        });
+      }
+      states.delete(scopeKey);
     }
+  };
+
+  const retireTerminalState = (state: SessionObserverState) => {
+    void synthesizeTerminalDigest({ state });
+    dormantRuns.delete(state.runId);
+    dropState(state);
   };
 
   const suspendState = (state: SessionObserverState) => {
     if (state.terminalHealth) {
-      void synthesizeTerminalDigest({ state });
-      dormantRuns.delete(state.runId);
-      dropState(state);
+      retireTerminalState(state);
       return;
     }
     rememberSessionObserverDormantRun(
@@ -193,6 +212,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     );
     dropState(state);
   };
+  const retireInactiveState = (state: SessionObserverState) =>
+    (disposed ? dropState : suspendState)(state);
 
   const demoteUtilityModel = (state: SessionObserverState): void => {
     if (state.timer) {
@@ -237,12 +258,11 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   }
 
   function modelStateIsCurrent(state: SessionObserverState): boolean {
-    if (!stateIsCurrent(state) || !state.utilityModelRef) {
-      return false;
-    }
     return (
+      stateIsCurrent(state) &&
+      Boolean(state.utilityModelRef) &&
       resolveUtilityModelRef({ cfg: deps.getConfig(), agentId: state.agentId }) ===
-      state.utilityModelRef
+        state.utilityModelRef
     );
   }
 
@@ -264,23 +284,17 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     run: (state: SessionObserverState, final: boolean) => void,
   ) => {
     if (!stateIsCurrent(state)) {
-      if (disposed) {
-        dropState(state);
-      } else {
-        suspendState(state);
-      }
+      retireInactiveState(state);
       return;
     }
-    if (!modelStateIsCurrent(state)) {
-      return;
-    }
-    if (state.inFlight || state.timer || state.terminalHealth) {
-      return;
-    }
-    if (state.digestCount >= MAX_LIVE_DIGESTS_PER_RUN) {
-      return;
-    }
-    if (pendingNotes(state).length < MIN_NOTES_PER_DIGEST) {
+    if (
+      !modelStateIsCurrent(state) ||
+      state.inFlight ||
+      state.timer ||
+      state.terminalHealth ||
+      state.digestCount >= MAX_LIVE_DIGESTS_PER_RUN ||
+      pendingNotes(state).length < MIN_NOTES_PER_DIGEST
+    ) {
       return;
     }
     const delay = Math.max(0, MIN_DIGEST_INTERVAL_MS - (now() - state.lastRunAt));
@@ -296,18 +310,12 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
 
   const runDigest = (state: SessionObserverState, final: boolean) => {
     if (!stateIsCurrent(state)) {
-      if (disposed) {
-        dropState(state);
-      } else {
-        suspendState(state);
-      }
+      retireInactiveState(state);
       return;
     }
     if (!modelStateIsCurrent(state)) {
       if (final) {
-        void synthesizeTerminalDigest({ state });
-        dormantRuns.delete(state.runId);
-        dropState(state);
+        retireTerminalState(state);
       }
       return;
     }
@@ -340,6 +348,10 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state.lastDigestNoteSequence = Math.max(state.lastDigestNoteSequence, lastSelectedSequence);
     };
     const requestGeneration = modelSlots.beginRequest(state);
+    const digestIsStale = () =>
+      !modelStateIsCurrent(state) ||
+      !modelSlots.requestIsCurrent(state, requestGeneration) ||
+      (!final && state.terminalHealth !== undefined);
     state.digestCount += 1;
     void (async () => {
       try {
@@ -347,16 +359,10 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           state,
           selectedNotes.map((note) => note.text),
         );
-        const stale =
-          !modelStateIsCurrent(state) ||
-          !modelSlots.requestIsCurrent(state, requestGeneration) ||
-          (!final && state.terminalHealth !== undefined);
-        if (stale) {
+        if (digestIsStale()) {
           retireSelectedNotes();
           if (final && stateIsTracked(state)) {
-            void synthesizeTerminalDigest({ state });
-            dormantRuns.delete(state.runId);
-            dropState(state);
+            retireTerminalState(state);
           }
           return;
         }
@@ -406,16 +412,10 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           dormantRuns.delete(state.runId);
         }
       } catch (error) {
-        const stale =
-          !modelStateIsCurrent(state) ||
-          !modelSlots.requestIsCurrent(state, requestGeneration) ||
-          (!final && state.terminalHealth !== undefined);
-        if (stale) {
+        if (digestIsStale()) {
           retireSelectedNotes();
           if (final && stateIsTracked(state)) {
-            void synthesizeTerminalDigest({ state });
-            dormantRuns.delete(state.runId);
-            dropState(state);
+            retireTerminalState(state);
           }
           return;
         }
@@ -427,9 +427,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
             error,
           });
           if (final || state.finalPending || state.terminalHealth) {
-            void synthesizeTerminalDigest({ state });
-            dormantRuns.delete(state.runId);
-            dropState(state);
+            retireTerminalState(state);
           } else {
             disableModelForRun(state);
           }
@@ -521,14 +519,24 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (disposed || getAgentRunContext(event.runId)?.isHeartbeat) {
       return;
     }
-    const terminalState = terminalRuns.inspect(event, settledError);
-    if (!terminalState) {
+    const lifecyclePhase = event.stream === "lifecycle" ? event.data.phase : undefined;
+    const terminal =
+      settledError || isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: event.data });
+    if (lifecyclePhase === "error" && !terminal) {
+      clearPendingTerminalError(event.runId);
+      const timer = setTimeoutFn(() => handleEvent(event, true), AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
+      pendingTerminalErrors.set(event.runId, timer);
       return;
     }
-    const { terminal, provisionalTerminal, lateRecovery } = terminalState;
+    if (terminal || lifecyclePhase === "start") {
+      clearPendingTerminalError(event.runId);
+    }
+    if (terminalRuns.has(event.runId)) {
+      return;
+    }
     if (supersededRuns.has(event.runId)) {
       if (terminal) {
-        terminalRuns.markTerminalRun(event, provisionalTerminal);
+        markSessionObserverRunSuperseded(terminalRuns, event.runId, event.ts);
         contextlessTerminalRuns.delete(event.runId);
         supersededRuns.delete(event.runId);
         dormantRuns.delete(event.runId);
@@ -565,7 +573,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     const agentId = eventAgentId || knownRun?.agentId;
     if (terminal) {
       contextlessTerminalRuns.delete(event.runId);
-      terminalRuns.markTerminalRun(event, provisionalTerminal);
+      if (!settledError) {
+        markSessionObserverRunSuperseded(terminalRuns, event.runId, event.ts);
+      }
     }
     const isPreamble = event.stream === "item" && event.data.kind === "preamble";
     if (!agentId) {
@@ -592,7 +602,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         revisionFloor = candidate;
       }
       const supersededRunId = state.runId;
-      terminalRuns.clearPendingTerminalError(supersededRunId);
+      clearPendingTerminalError(supersededRunId);
       if (isRunStart) {
         markSessionObserverRunSuperseded(supersededRuns, supersededRunId, event.ts);
       }
@@ -619,10 +629,14 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       if (isRunStart) {
         if (revisionFloor) {
           rememberSessionObserverRevisionFloor(revisionFloors, scopeKey, revisionFloor);
+          const previousRunId = revisionFloor.previousDigest?.runId;
+          if (previousRunId && previousRunId !== event.runId) {
+            markSessionObserverRunSuperseded(supersededRuns, previousRunId, event.ts);
+          }
         }
         for (const run of superseded) {
           markSessionObserverRunSuperseded(supersededRuns, run.runId, event.ts);
-          terminalRuns.clearPendingTerminalError(run.runId);
+          clearPendingTerminalError(run.runId);
           dormantRuns.delete(run.runId);
         }
       }
@@ -646,11 +660,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }
       return;
     }
-    if (state.terminalHealth && !lateRecovery) {
+    if (state.terminalHealth) {
       return;
-    }
-    if (lateRecovery) {
-      state.terminalHealth = undefined;
     }
     if (revisionFloor && revisionFloor.revision > state.revision) {
       state.revision = revisionFloor.revision;
@@ -714,7 +725,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     getCompanionSnapshot,
     dispose() {
       disposed = true;
-      terminalRuns.dispose();
+      pendingTerminalErrors.forEach((_timer, runId) => clearPendingTerminalError(runId));
       preamblePublisher.dispose();
       unsubscribeChanges();
       for (const state of states.values()) {
@@ -723,6 +734,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       dormantRuns.clear();
       revisionFloors.clear();
       supersededRuns.clear();
+      terminalRuns.clear();
       disabledRuns.clear();
       visibleConnections.clear();
     },

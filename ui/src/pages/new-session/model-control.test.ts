@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
@@ -63,6 +64,41 @@ describe("new-session model runtime", () => {
     expect(control.cloudRuntimeUnsupportedReason(profile)).toBe(expected);
   });
 
+  it.each([
+    {
+      name: "allows opted-in remote execution",
+      runtimeId: "codex",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+    },
+    {
+      name: "allows embedded execution",
+      runtimeId: "openclaw",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+    },
+    { name: "rejects a cloud-only runtime", runtimeId: "cloud-only" },
+    {
+      name: "rejects a stale support flag without an owner requirement",
+      runtimeId: "stale",
+      devicePlacementSupported: true,
+    },
+  ])("$name on paired devices", ({ runtimeId, devicePlacement, devicePlacementSupported }) => {
+    const control = new NewSessionModelControl(() => undefined);
+    vi.spyOn(control, "resolveAgentRuntime").mockReturnValue({
+      id: runtimeId,
+      cloudPlacementSupported: true,
+      devicePlacementSupported: devicePlacementSupported ?? Boolean(devicePlacement),
+      ...(devicePlacement ? { devicePlacement } : {}),
+      source: "model",
+    });
+
+    expect(control.devicePlacementUnsupportedReason()).toBe(
+      devicePlacement ? undefined : "This runtime does not support paired devices",
+    );
+  });
+
   it("keeps CLI agents hidden and undiscovered while the Labs gate is off", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
@@ -72,7 +108,7 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", false);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request).not.toHaveBeenCalledWith("sessions.catalog.list", expect.anything());
     expect(
       renderControl(control, context).querySelector("[data-chat-model-target-group]"),
@@ -117,14 +153,14 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", true);
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
         "sessions.catalog.list",
         { agentId: "main", limitPerHost: 1 },
         { signal: expect.any(AbortSignal) },
       ),
     );
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const container = renderControl(control, context);
       expect(container.querySelector('[data-chat-model-target-group="cliAgents"]')).not.toBeNull();
       expect(container.querySelector('[data-chat-model-target="anthropic"]')).not.toBeNull();
@@ -149,7 +185,7 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
     const container = renderControl(control, context);
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
@@ -183,6 +219,54 @@ describe("new-session model runtime", () => {
     expect(control.thinkingLevel).toBe("high");
   });
 
+  it("selects a context window for the draft model", async () => {
+    const { context } = contextWith([
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+      {
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        provider: "anthropic",
+        contextWindow: 1_000_000,
+        contextWindows: [
+          { id: "200k", label: "200K", contextWindow: 200_000 },
+          { id: "1m", label: "1M", contextWindow: 1_000_000 },
+        ],
+        contextWindowDefault: "1m",
+      },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true);
+
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, context).querySelector(
+          '[data-chat-model-option="anthropic/claude-fable-5"]',
+        ),
+      ).not.toBeNull(),
+    );
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/claude-fable-5"]')
+      ?.click();
+
+    const container = renderControl(control, context);
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '[data-chat-context-window-toggle="200k"]',
+    );
+    expect(toggle).toBeInstanceOf(HTMLButtonElement);
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+    toggle?.click();
+
+    expect(control.contextWindow).toBe("200k");
+
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-luna"]')
+      ?.click();
+    expect(control.contextWindow).toBe("");
+    expect(
+      renderControl(control, context).querySelector("[data-chat-context-window-toggle]"),
+    ).toBeNull();
+  });
+
   it("does not mark ordinary catalog loading as preference restoration", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
@@ -192,7 +276,7 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
 
     expect(control.isRestoringPreference()).toBe(false);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
   });
 
   it("renders initial metadata loading without synthesizing the configured default", async () => {
@@ -203,7 +287,7 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     const container = renderControl(control, context);
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
       "Loading models",
@@ -343,7 +427,7 @@ describe("new-session model runtime", () => {
     const control = new NewSessionModelControl(notify);
 
     control.load(context, "main", true);
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(request).toHaveBeenCalledOnce();
       expect(notify).toHaveBeenCalledTimes(2);
     });
@@ -396,7 +480,7 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const container = renderControl(control, context);
       expect(
         container
@@ -460,8 +544,8 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await vi.waitFor(() => {
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => {
       const container = renderControl(control, context);
       expect(
         container

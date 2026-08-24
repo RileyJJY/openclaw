@@ -59,8 +59,7 @@ type AgentRunObservation = AgentJobTerminalSnapshot & {
 type AgentRunSnapshot = AgentRunObservation & { cachedAt: number };
 type PendingAgentRunTerminal = {
   snapshot: AgentRunObservation;
-  timer: NodeJS.Timeout;
-  graceExpired?: boolean;
+  timer?: NodeJS.Timeout;
 };
 type AgentJobRecord = {
   cachedAt: number;
@@ -157,17 +156,6 @@ function terminalOutcomeFromSnapshot(
   return buildAgentRunTerminalOutcome(snapshot);
 }
 
-function isFailClosedAgentRunTerminalOutcome(
-  outcome: AgentRunTerminalOutcome | undefined,
-): boolean {
-  return (
-    isStickyAgentRunTerminalOutcome(outcome) ||
-    outcome?.reason === "aborted" ||
-    outcome?.reason === "blocked" ||
-    outcome?.reason === "abandoned"
-  );
-}
-
 function shouldPreserveTerminalSnapshot(
   existing: AgentJobTerminalSnapshot,
   incoming: AgentJobTerminalSnapshot,
@@ -207,16 +195,9 @@ function mergeSnapshot(
   };
 }
 
-function notifyAgentRunWaiters(runId: string) {
-  for (const waiter of agentRunWaiters.get(runId) ?? []) {
-    waiter();
-  }
-}
-
 function recordAgentRunSnapshot(
   snapshot: Omit<AgentRunObservation, "version">,
   version = nextAgentRunVersion(),
-  options?: { notifyWaiters?: boolean },
 ) {
   const entry = { ...snapshot, cachedAt: Date.now(), version };
   pruneAgentRunCache(entry.cachedAt);
@@ -231,37 +212,24 @@ function recordAgentRunSnapshot(
     snapshotsBySource,
   });
   enforceAgentRunCacheMaxEntries();
-  if (options?.notifyWaiters !== false) {
-    notifyAgentRunWaiters(entry.runId);
+  for (const waiter of agentRunWaiters.get(entry.runId) ?? []) {
+    waiter();
   }
 }
 
-function clearPendingAgentRunError(runId: string) {
-  const pending = pendingAgentRunErrors.get(runId);
-  if (!pending) {
-    return;
+function clearPendingAgentRunTerminals(runId: string) {
+  for (const pendingRuns of [pendingAgentRunErrors, pendingAgentRunTimeouts]) {
+    const pending = pendingRuns.get(runId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pendingRuns.delete(runId);
+    }
   }
-  clearTimeout(pending.timer);
-  pendingAgentRunErrors.delete(runId);
-}
-
-function clearPendingAgentRunTimeout(runId: string) {
-  const pending = pendingAgentRunTimeouts.get(runId);
-  if (!pending) {
-    return;
-  }
-  clearTimeout(pending.timer);
-  pendingAgentRunTimeouts.delete(runId);
-}
-
-function hasAgentRunWaiters(runId: string): boolean {
-  return (agentRunWaiters.get(runId)?.size ?? 0) > 0;
 }
 
 function beginAgentJob(runId: string, startedAt?: number) {
   nextAgentRunVersion();
-  clearPendingAgentRunError(runId);
-  clearPendingAgentRunTimeout(runId);
+  clearPendingAgentRunTerminals(runId);
   agentJobs.delete(runId);
   if (startedAt !== undefined) {
     agentRunStarts.set(runId, startedAt);
@@ -286,25 +254,18 @@ function schedulePendingAgentRunTerminal(
     terminalSnapshot.version = snapshot.version;
     return;
   }
-  clearPendingAgentRunError(snapshot.runId);
-  clearPendingAgentRunTimeout(snapshot.runId);
+  clearPendingAgentRunTerminals(snapshot.runId);
   const timer = setSafeTimeout(() => {
     const pending = pendingRuns.get(snapshot.runId);
     if (!pending || pending.timer !== timer) {
       return;
     }
-    const retainForActiveWaiter =
+    if (
       pendingRuns === pendingAgentRunErrors &&
       terminalOutcomeFromSnapshot(pending.snapshot)?.reason === "failed" &&
-      !pendingAgentRunTimeouts.has(snapshot.runId) &&
-      hasAgentRunWaiters(snapshot.runId);
-    if (retainForActiveWaiter) {
-      // Keep the provisional error until every active waiter settles. The
-      // waiter timeout still exposes it, while a later lifecycle end can win.
-      pending.graceExpired = true;
-      recordAgentRunSnapshot(pending.snapshot, pending.snapshot.version, {
-        notifyWaiters: false,
-      });
+      agentRunWaiters.has(snapshot.runId)
+    ) {
+      pending.timer = undefined;
       return;
     }
     pendingRuns.delete(snapshot.runId);
@@ -408,8 +369,7 @@ function ensureAgentRunListener() {
       return;
     }
     const terminalSnapshot = mergePendingAgentRunTerminal(snapshot);
-    clearPendingAgentRunError(evt.runId);
-    clearPendingAgentRunTimeout(evt.runId);
+    clearPendingAgentRunTerminals(evt.runId);
     recordAgentRunSnapshot(terminalSnapshot, snapshot.version);
   });
 }
@@ -594,13 +554,13 @@ function addAgentRunWaiter(runId: string, waiter: AgentJobWaiter): () => void {
   waiters.add(waiter);
   agentRunWaiters.set(runId, waiters);
   return () => {
-    if (!waiters.delete(waiter)) {
-      return;
-    }
+    waiters.delete(waiter);
     if (waiters.size === 0) {
       agentRunWaiters.delete(runId);
-      if (pendingAgentRunErrors.get(runId)?.graceExpired) {
-        clearPendingAgentRunError(runId);
+      const pendingError = pendingAgentRunErrors.get(runId);
+      if (pendingError && !pendingError.timer) {
+        pendingAgentRunErrors.delete(runId);
+        recordAgentRunSnapshot(pendingError.snapshot, pendingError.snapshot.version);
       }
     }
   };
@@ -673,12 +633,12 @@ export async function waitForAgentJob(params: {
     removeWaiter = addAgentRunWaiter(params.runId, onWake);
     const timeoutHandle = setSafeTimeout(() => {
       if (!params.source) {
-        const pendingError = pendingAgentRunErrors.get(params.runId)?.snapshot;
+        const pending = pendingAgentRunErrors.get(params.runId);
+        const pendingError = pending?.snapshot;
         if (pendingError && pendingError.version > afterVersion) {
-          const pending = pendingAgentRunErrors.get(params.runId);
           finish(
-            pending?.graceExpired ||
-              isFailClosedAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
+            !pending.timer ||
+              isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
               ? publicSnapshot(pendingError)
               : createPendingErrorTimeoutSnapshot(pendingError),
           );
