@@ -195,7 +195,7 @@ describe("waitForAgentJob timeout fallback", () => {
 
   it("publishes a later lifecycle failure after an aborted end at retry grace", async () => {
     const runId = `run-timeout-fallback-aborted-end-${runSequence++}`;
-    let terminalOutcome: Awaited<ReturnType<typeof waitForAgentJob>>;
+    let terminalOutcome: Awaited<ReturnType<typeof waitForAgentJob>> | undefined;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 }).then((outcome) => {
       terminalOutcome = outcome;
       return outcome;
