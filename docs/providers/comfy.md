@@ -246,8 +246,12 @@ limit before sending a request.
 
 <Note>
 Existing workflows configured under `models.providers.comfy` remain supported.
-This change does not retire that released configuration path; configure the
-new `workflowFileMaxBytes` setting under `plugins.entries.comfy.config`.
+To add `workflowFileMaxBytes` to an existing legacy workflow, migrate the
+complete Comfy configuration to `plugins.entries.comfy.config`: copy its shared
+connection keys and each used `image`, `video`, or `music` workflow section,
+then add the new setting. The two configuration roots are not merged; adding a
+partial plugin config can mask the legacy workflow and disable generation tools.
+Remove the legacy `models.providers.comfy` entry after migration.
 </Note>
 
 ### Per-capability keys

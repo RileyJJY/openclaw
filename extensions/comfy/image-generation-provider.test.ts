@@ -297,6 +297,28 @@ describe("comfy image-generation provider", () => {
     ).toBe(true);
   });
 
+  it("does not merge a partial plugin config with a legacy Comfy workflow", () => {
+    const cfg = Object.assign(
+      buildComfyConfig({
+        workflowFileMaxBytes: DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES,
+      }),
+      {
+        models: {
+          providers: {
+            comfy: {
+              workflow: {
+                "6": { inputs: { text: "" } },
+              },
+              promptNodeId: "6",
+            },
+          },
+        },
+      },
+    );
+
+    expect(buildComfyImageGenerationProvider().isConfigured?.({ cfg })).toBe(false);
+  });
+
   it("treats cloud comfy workflows as configured with a plugin config API key", () => {
     const provider = buildComfyImageGenerationProvider();
     expect(
