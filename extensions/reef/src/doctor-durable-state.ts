@@ -7,7 +7,6 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Import from defining modules, not the protocol barrel: index.js re-exports
 // guard-adapters, whose provider-http graph doctor enumeration must not cold-load.
-import { verifyChain, verifyChainSegment, type AuditEntry } from "../protocol/audit.js";
 import { parseVerdict } from "../protocol/guard.js";
 import type { ReviewRequest } from "../protocol/pipeline.js";
 import type { SignedReceipt } from "../protocol/receipts.js";
