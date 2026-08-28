@@ -78,6 +78,5 @@ export async function forEachLegacyReefJsonlRecord(
     }
     // Preserve the legacy replay migration behavior: any invalid final
     // unterminated record is treated as a torn append and dropped.
-    return;
   }
 }
