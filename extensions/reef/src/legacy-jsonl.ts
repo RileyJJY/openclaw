@@ -69,14 +69,15 @@ export async function forEachLegacyReefJsonlRecord(
   }
   const pending =
     pendingChunks.length === 1 ? pendingChunks[0]! : Buffer.concat(pendingChunks, pendingBytes);
-  let value: unknown;
   try {
-    value = JSON.parse(pending.toString("utf8")) as unknown;
+    const value = JSON.parse(pending.toString("utf8")) as unknown;
+    await visit(value, pendingBytes);
   } catch (error) {
     if (finalRecord === "reject-torn") {
       throw error;
     }
+    // Preserve the legacy replay migration behavior: any invalid final
+    // unterminated record is treated as a torn append and dropped.
     return;
   }
-  await visit(value, pendingBytes);
 }

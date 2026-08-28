@@ -696,7 +696,7 @@ describe("Reef doctor contract", () => {
     expect(fs.existsSync(`${replayPath}.migrated`)).toBe(false);
   });
 
-  it("rejects a complete invalid final replay record without a trailing newline", async () => {
+  it("drops a semantically invalid final replay record without a trailing newline", async () => {
     const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
     const replayPath = path.join(legacyDir, "replay.jsonl");
     fs.mkdirSync(legacyDir, { recursive: true });
@@ -719,13 +719,14 @@ describe("Reef doctor contract", () => {
 
     const result = await migration.migrateLegacyState(params);
 
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining("Reef replay consume lacks claim"),
-      expect.stringContaining("Reef durable state migration is incomplete"),
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated 0 Reef replay bindings -> plugin state",
+      expect.stringContaining("Archived Reef replay state legacy source"),
+      "Verified all Reef durable state; cleared migration barrier",
     ]);
-    expect(fs.existsSync(replayPath)).toBe(true);
-    expect(fs.existsSync(`${replayPath}.migrated`)).toBe(false);
+    expect(fs.existsSync(replayPath)).toBe(false);
+    expect(fs.existsSync(`${replayPath}.migrated`)).toBe(true);
   });
 
   it("finishes an interrupted migration of an empty audit trail", async () => {
