@@ -211,13 +211,13 @@ Comfy supports shared top-level connection settings plus per-capability workflow
 
 ### Shared keys
 
-| Key                   | Type                   | Description                                                                           |
-| --------------------- | ---------------------- | ------------------------------------------------------------------------------------- |
-| `mode`                | `"local"` or `"cloud"` | Connection mode. Defaults to `"local"`.                                               |
-| `baseUrl`             | string                 | Defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud. |
-| `apiKey`              | string or SecretRef    | Optional cloud key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars.  |
-| `allowPrivateNetwork` | boolean                | Allow a private/LAN `baseUrl` in cloud mode or a local private-DNS FQDN.              |
-| `headers`             | object                 | Extra request headers; each value accepts a string or SecretRef.                      |
+| Key                    | Type                   | Description                                                                                                                                   |
+| ---------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                 | `"local"` or `"cloud"` | Connection mode. Defaults to `"local"`.                                                                                                       |
+| `baseUrl`              | string                 | Defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud.                                                         |
+| `apiKey`               | string or SecretRef    | Optional cloud key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars.                                                          |
+| `allowPrivateNetwork`  | boolean                | Allow a private/LAN `baseUrl` in cloud mode or a local private-DNS FQDN.                                                                      |
+| `headers`              | object                 | Extra request headers; each value accepts a string or SecretRef.                                                                              |
 | `workflowFileMaxBytes` | integer                | Optional maximum `workflowPath` file size in bytes. When unset, existing `workflowPath` behavior is preserved and files of any size are read. |
 
 Use `headers.Authorization` for a ComfyUI instance behind HTTP authentication.
