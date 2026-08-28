@@ -8,6 +8,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as fsSafe from "./fs-safe.js";
 import { detectLegacyStateMigrations } from "./state-migrations.doctor.js";
 import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
@@ -72,20 +73,21 @@ describe("legacy JSON plugin migration diagnostics", () => {
         if (fault !== "ENOENT") {
           await fs.writeFile(sourcePath, source, "utf8");
         }
-        const readFile = fs.readFile.bind(fs);
+        const readRegularFile = fsSafe.readRegularFile.bind(fsSafe);
         let sourceReads = 0;
-        vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+        vi.spyOn(fsSafe, "readRegularFile").mockImplementation(async ({ filePath, maxBytes }) => {
           if (filePath === sourcePath) {
             sourceReads++;
             // Let detection succeed, then fail the direct migration read.
             if (phase === "migration" && sourceReads === 1) {
-              return '[{"disabled":true}]';
+              const result = await readRegularFile({ filePath, maxBytes });
+              return { ...result, buffer: Buffer.from('[{"disabled":true}]') };
             }
             if (fault === "EACCES" || fault === "EIO") {
               throw Object.assign(new Error(`${fault}: read ${sourcePath}`), { code: fault });
             }
           }
-          return readFile(filePath, options);
+          return readRegularFile({ filePath, maxBytes });
         });
 
         let warnings: string[];
@@ -106,7 +108,7 @@ describe("legacy JSON plugin migration diagnostics", () => {
             homedir: () => state.home,
           });
           expect(result.changes).toEqual([]);
-          expect(sourceReads).toBe(2);
+          expect(sourceReads).toBe(fault === "ENOENT" ? 1 : 2);
           warnings = result.warnings;
         }
 
@@ -123,7 +125,7 @@ describe("legacy JSON plugin migration diagnostics", () => {
           expect(warnings[0]).toContain(expectedError);
         }
         if (fault !== "ENOENT") {
-          await expect(readFile(sourcePath, "utf8")).resolves.toBe(source);
+          await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
         }
         await expect(fs.stat(`${sourcePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
       },

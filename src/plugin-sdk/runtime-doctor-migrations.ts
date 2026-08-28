@@ -9,6 +9,7 @@
 import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { readRegularFile } from "../infra/fs-safe.js";
 import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
@@ -436,10 +437,9 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
     filePath: string,
     limit: number | undefined,
   ): Promise<ReadSourceResult> => {
+    let buffer: Buffer;
     try {
-      const { buffer } = await readRegularFile({ filePath, maxBytes: limit });
-      const source = params.parse(JSON.parse(buffer.toString("utf8")) as unknown);
-      return source === null ? { kind: "unavailable" } : { kind: "loaded", source };
+      ({ buffer } = await readRegularFile({ filePath, maxBytes: limit }));
     } catch (err) {
       if (
         limit !== undefined &&
@@ -448,8 +448,13 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
       ) {
         return { kind: "oversized", maxBytes: limit };
       }
-      return { kind: "unavailable" };
+      if (hasErrnoCode(err, "ENOENT")) {
+        return { kind: "unavailable" };
+      }
+      throw err;
     }
+    const source = params.parse(JSON.parse(buffer.toString("utf8")) as unknown);
+    return source === null ? { kind: "unavailable" } : { kind: "loaded", source };
   };
 
   const readSourceWithRecovery = async (filePath: string): Promise<ReadSourceResult> => {
