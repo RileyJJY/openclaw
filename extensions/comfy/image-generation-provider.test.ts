@@ -1,7 +1,7 @@
 // Comfy tests cover image generation provider plugin behavior.
 import { spawn, spawnSync } from "node:child_process";
 import type { LookupAddress } from "node:dns";
-import { readFile, truncate, writeFile } from "node:fs/promises";
+import { readFile, symlink, truncate, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -574,6 +574,8 @@ describe("comfy image-generation provider", () => {
     });
 
     expect(seedFromBody(parseJsonBody(1), "4")).toBe(12345);
+  });
+
   it("submits a local workflow loaded from workflowPath", async () => {
     await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
       const workflowPath = path.join(tempRoot, "workflow.json");
@@ -715,6 +717,23 @@ describe("comfy image-generation provider", () => {
 
       await expect(readComfyWorkflowFile(workflowPath, undefined)).resolves.toBe(
         await readFile(workflowPath, "utf8"),
+      );
+    });
+  });
+
+  it("preserves symlinked workflowPath reads with the configured byte cap", async () => {
+    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
+      const targetPath = path.join(tempRoot, "workflow-target.json");
+      const workflowPath = path.join(tempRoot, "workflow-link.json");
+      const workflow = JSON.stringify({
+        "6": { class_type: "CLIPTextEncode", inputs: { text: "" } },
+        "9": { class_type: "SaveImage", inputs: {} },
+      });
+      await writeFile(targetPath, workflow, "utf8");
+      await symlink(targetPath, workflowPath);
+
+      await expect(readComfyWorkflowFile(workflowPath, Buffer.byteLength(workflow))).resolves.toBe(
+        workflow,
       );
     });
   });

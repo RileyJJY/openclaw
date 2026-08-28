@@ -12,7 +12,10 @@ export async function readComfyWorkflowFile(
     return fs.readFile(filePath, "utf8");
   }
   try {
-    return (await readRegularFile({ filePath, maxBytes })).buffer.toString("utf8");
+    // Preserve configured symlink paths while still rejecting FIFOs and other special files.
+    return (
+      await readRegularFile({ filePath: await fs.realpath(filePath), maxBytes })
+    ).buffer.toString("utf8");
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "too-large") {
       throw workflowFileTooLargeError(filePath, maxBytes, error);
