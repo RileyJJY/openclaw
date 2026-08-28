@@ -403,8 +403,11 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
   parse: (value: unknown) => TSource | null;
   namespace: string;
   maxEntries: number;
+  /** Optional byte cap for the first read; omitted to preserve legacy behavior. */
   maxBytes?: number;
+  /** Optional second bounded read attempted after the first cap is exceeded. */
   recoveryMaxBytes?: number;
+  /** Custom preview and warning when the final bounded read is still oversized. */
   oversizedSource?: (params: { filePath: string; maxBytes: number }) => {
     warning: string;
     preview: string;

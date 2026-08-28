@@ -166,7 +166,16 @@ describe("definePluginDoctorMigrationFromPlans", () => {
 
 type TestState = { value: string };
 
-function createJsonMigration(options: { maxBytes?: number } = {}): PluginDoctorStateMigration {
+function createJsonMigration(
+  options: {
+    maxBytes?: number;
+    recoveryMaxBytes?: number;
+    oversizedSource?: (params: { filePath: string; maxBytes: number }) => {
+      warning: string;
+      preview: string;
+    };
+  } = {},
+): PluginDoctorStateMigration {
   return defineLegacyJsonStateMigration<TestState>({
     id: "runtime-doctor-json-migration-test",
     label: "runtime doctor JSON test",
@@ -230,6 +239,39 @@ describe("defineLegacyJsonStateMigration", () => {
       migration.detectLegacyState(detectParams(stateDir, {} as PluginDoctorStateMigrationContext)),
     ).resolves.toEqual({
       preview: [expect.stringContaining("exceeds 128 bytes")],
+    });
+  });
+
+  it("retries once within recoveryMaxBytes", async () => {
+    const sourcePath = path.join(stateDir, "legacy.json");
+    await fs.writeFile(sourcePath, JSON.stringify({ value: "x".repeat(256) }), "utf8");
+
+    const migration = createJsonMigration({ maxBytes: 128, recoveryMaxBytes: 512 });
+    await expect(
+      migration.detectLegacyState(detectParams(stateDir, {} as PluginDoctorStateMigrationContext)),
+    ).resolves.toEqual({ preview: ["loaded"] });
+  });
+
+  it("uses the final recovery limit for oversizedSource", async () => {
+    const sourcePath = path.join(stateDir, "legacy.json");
+    await fs.writeFile(sourcePath, JSON.stringify({ value: "x".repeat(256) }), "utf8");
+
+    const migration = createJsonMigration({
+      maxBytes: 128,
+      recoveryMaxBytes: 256,
+      oversizedSource: ({ filePath, maxBytes }) => ({
+        preview: `oversized:${filePath}:${maxBytes}`,
+        warning: `retained:${filePath}:${maxBytes}`,
+      }),
+    });
+    const params = detectParams(stateDir, {} as PluginDoctorStateMigrationContext);
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [`oversized:${sourcePath}:256`],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [`retained:${sourcePath}:256`],
     });
   });
 });
