@@ -91,6 +91,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
     const markers = resolvePhaseMarkers(params.phase);
     await updateManagedDreamingMarkdownFile({
       filePath: inlinePath,
+      workspaceDir: params.workspaceDir,
       heading: DAILY_PHASE_HEADINGS[params.phase],
       startMarker: markers.start,
       endMarker: markers.end,

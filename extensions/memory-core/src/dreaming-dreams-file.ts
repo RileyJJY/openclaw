@@ -33,6 +33,7 @@ type DreamsFileLockEntry = {
 
 type ManagedMarkdownUpdateParams = {
   filePath: string;
+  workspaceDir?: string;
   heading: string;
   startMarker: string;
   endMarker: string;
@@ -89,7 +90,28 @@ export async function readDreamsFile(dreamsPath: string): Promise<string> {
 async function resolveSafeMarkdownPath(
   filePath: string,
   allowSymlink: boolean,
+  workspaceDir?: string,
 ): Promise<{ filePath: string; stat: Stats } | null> {
+  const pathDescription = DREAMS_FILENAMES.includes(
+    path.basename(filePath) as (typeof DREAMS_FILENAMES)[number],
+  )
+    ? "DREAMS.md"
+    : `markdown file: ${filePath}`;
+  let workspaceMemoryDir: string | undefined;
+  if (allowSymlink) {
+    if (!workspaceDir) {
+      throw new Error(`Refusing to write ${pathDescription} without a workspace directory`);
+    }
+    const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
+    // Keep the configured memory directory itself as the lexical boundary.
+    // Resolving it would make an external `memory` symlink the new trusted
+    // root and defeat the containment check.
+    workspaceMemoryDir = path.join(canonicalWorkspaceDir, "memory");
+    const canonicalParent = await fs.realpath(path.dirname(filePath));
+    if (!isPathInside(workspaceMemoryDir, canonicalParent)) {
+      throw new Error(`Refusing to write ${pathDescription} outside workspace memory directory`);
+    }
+  }
   const stat = await fs.lstat(filePath).catch((err: unknown) => {
     if (extractErrorCode(err) === "ENOENT") {
       return null;
@@ -99,21 +121,13 @@ async function resolveSafeMarkdownPath(
   if (!stat) {
     return null;
   }
-  const pathDescription = DREAMS_FILENAMES.includes(
-    path.basename(filePath) as (typeof DREAMS_FILENAMES)[number],
-  )
-    ? "DREAMS.md"
-    : `markdown file: ${filePath}`;
   if (stat.isSymbolicLink()) {
     if (!allowSymlink) {
       throw new Error(`Refusing to write symlinked ${pathDescription}`);
     }
     const resolvedPath = await fs.realpath(filePath);
-    const memoryDir = await fs.realpath(path.dirname(filePath));
-    if (!isPathInside(memoryDir, resolvedPath)) {
-      throw new Error(
-        `Refusing to write symlinked ${pathDescription} outside workspace memory directory`,
-      );
+    if (!workspaceMemoryDir || !isPathInside(workspaceMemoryDir, resolvedPath)) {
+      throw new Error(`Refusing to write ${pathDescription} outside workspace memory directory`);
     }
     const resolvedStat = await fs.stat(resolvedPath);
     if (!resolvedStat.isFile()) {
@@ -169,6 +183,29 @@ async function replaceManagedMarkdownBlockStreaming(
   let output: FileHandle | undefined;
   const withheldPath = path.join(tempDir, `${path.basename(params.filePath)}.withheld`);
   let withheldFile: FileHandle | undefined;
+  const describeError = (error: unknown): string => {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    if (typeof error === "string") {
+      return error;
+    }
+    return JSON.stringify(error) ?? "unknown error";
+  };
+  const cleanupTempDir = async (originalError?: unknown): Promise<void> => {
+    try {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    } catch (cleanupError) {
+      if (originalError !== undefined) {
+        throw new Error(
+          `Streaming managed Markdown replacement failed (${describeError(originalError)}); ` +
+            `temporary directory cleanup also failed (${describeError(cleanupError)})`,
+          { cause: cleanupError },
+        );
+      }
+      throw cleanupError;
+    }
+  };
   try {
     const opened = await openLocalFileSafely({ filePath: params.filePath });
     input = opened.handle;
@@ -194,6 +231,7 @@ async function replaceManagedMarkdownBlockStreaming(
     let outputBytes = 0;
     let outputEndsWithLf = false;
     let lastNonWhitespaceEndBytes = 0;
+    let withheldBytes = 0;
     let duplicateGapStartBytes: number | undefined;
     let duplicateGapStartEndsWithLf = false;
     let duplicateGapIsWhitespace = true;
@@ -201,11 +239,40 @@ async function replaceManagedMarkdownBlockStreaming(
 
     const isLineWhitespace = (value: string): boolean => /^[\t \r\n]*$/.test(value);
 
+    const writeAll = async (
+      handle: FileHandle,
+      buffer: Buffer,
+      position: number,
+      label: string,
+    ): Promise<void> => {
+      let written = 0;
+      while (written < buffer.byteLength) {
+        const { bytesWritten } = await handle.write(
+          buffer,
+          written,
+          buffer.byteLength - written,
+          position + written,
+        );
+        if (
+          !Number.isInteger(bytesWritten) ||
+          bytesWritten <= 0 ||
+          bytesWritten > buffer.byteLength - written
+        ) {
+          throw new Error(`${label} write made invalid progress at byte ${position + written}`);
+        }
+        written += bytesWritten;
+      }
+    };
+
     // Keep only a rolling marker window in memory. A malformed start marker
     // without an end marker is spooled so the original file can be replayed.
     const writeChunk = async (chunk: string): Promise<void> => {
       if (chunk.length > 0) {
-        await output?.write(chunk, outputBytes, "utf-8");
+        if (!output) {
+          throw new Error("Streaming managed Markdown output is not open");
+        }
+        const buffer = Buffer.from(chunk, "utf-8");
+        await writeAll(output, buffer, outputBytes, "Streaming managed Markdown output");
         if (duplicateGapStartBytes !== undefined && !isLineWhitespace(chunk)) {
           duplicateGapIsWhitespace = false;
         }
@@ -223,12 +290,15 @@ async function replaceManagedMarkdownBlockStreaming(
         return;
       }
       withheldFile ??= await fs.open(withheldPath, "w");
-      await withheldFile.write(chunk);
+      const buffer = Buffer.from(chunk, "utf-8");
+      await writeAll(withheldFile, buffer, withheldBytes, "Withheld managed Markdown output");
+      withheldBytes += buffer.byteLength;
     };
     const clearWithheld = async (): Promise<void> => {
       await withheldFile?.close();
       withheldFile = undefined;
-      await fs.rm(withheldPath, { force: true }).catch(() => undefined);
+      await fs.rm(withheldPath, { force: true });
+      withheldBytes = 0;
     };
     const replayWithheld = async (): Promise<void> => {
       await withheldFile?.close();
@@ -242,7 +312,8 @@ async function replaceManagedMarkdownBlockStreaming(
           throw err;
         }
       }
-      await fs.rm(withheldPath, { force: true }).catch(() => undefined);
+      await fs.rm(withheldPath, { force: true });
+      withheldBytes = 0;
     };
     const writeManagedBlock = async (): Promise<void> => {
       await writeChunk(managedBlock);
@@ -386,8 +457,10 @@ async function replaceManagedMarkdownBlockStreaming(
     await writeChunk(pending);
     if (!wroteManagedBlock) {
       await output.truncate(lastNonWhitespaceEndBytes);
+      outputBytes = lastNonWhitespaceEndBytes;
+      outputEndsWithLf = false;
       const separator = wroteAnyContent && lastNonWhitespaceEndBytes > 0 ? "\n\n" : "";
-      await output.write(`${separator}${managedBlock}\n`, lastNonWhitespaceEndBytes, "utf-8");
+      await writeChunk(`${separator}${managedBlock}\n`);
     } else if (!outputEndsWithLf) {
       await writeChunk("\n");
     }
@@ -403,10 +476,10 @@ async function replaceManagedMarkdownBlockStreaming(
     await input?.close().catch(() => undefined);
     await output?.close().catch(() => undefined);
     await withheldFile?.close().catch(() => undefined);
-    await fs.rm(tempDir, { force: true, recursive: true }).catch(() => undefined);
+    await cleanupTempDir(err);
     throw err;
   }
-  await fs.rm(tempDir, { force: true, recursive: true }).catch(() => undefined);
+  await cleanupTempDir();
 }
 
 export async function updateManagedDreamingMarkdownFile(
@@ -415,7 +488,11 @@ export async function updateManagedDreamingMarkdownFile(
   await fs.mkdir(path.dirname(params.filePath), { recursive: true });
   // Daily memory files historically followed user-managed symlinks. Resolve
   // those links before atomic replacement so the link itself stays intact.
-  const resolved = await resolveSafeMarkdownPath(params.filePath, params.allowSymlink === true);
+  const resolved = await resolveSafeMarkdownPath(
+    params.filePath,
+    params.allowSymlink === true,
+    params.workspaceDir,
+  );
   const resolvedParams = {
     ...params,
     filePath: resolved?.filePath ?? params.filePath,
@@ -512,6 +589,7 @@ export async function updateDeepDreamsFile(params: {
       await withDreamsFileLock(params.workspaceDir, async (dreamsPath) => {
         await updateManagedDreamingMarkdownFile({
           filePath: dreamsPath,
+          workspaceDir: params.workspaceDir,
           heading: "## Deep Sleep",
           startMarker: DEEP_START_MARKER,
           endMarker: DEEP_END_MARKER,
