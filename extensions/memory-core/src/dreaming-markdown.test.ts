@@ -598,7 +598,7 @@ describe("dreaming markdown storage", () => {
   it("preserves an existing daily memory symlink while updating its target", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
     const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
-    const targetPath = path.join(workspaceDir, "daily-memory-target.md");
+    const targetPath = path.join(workspaceDir, "memory", "daily-memory-target.md");
     await fs.mkdir(path.dirname(inlinePath), { recursive: true });
     await fs.writeFile(targetPath, "# Existing daily memory\n\nUser note stays.\n", "utf-8");
     await fs.symlink(targetPath, inlinePath);
@@ -620,6 +620,39 @@ describe("dreaming markdown storage", () => {
     expect(content).toContain("# Existing daily memory");
     expect(content).toContain("User note stays.");
     expect(content).toContain("- Candidate: symlink-compatible update");
+  });
+
+  it("rejects a daily memory symlink whose target is outside the workspace", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    const outsidePath = path.join(
+      path.dirname(workspaceDir),
+      `${path.basename(workspaceDir)}-outside.md`,
+    );
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    await fs.writeFile(outsidePath, "outside workspace\n", "utf-8");
+    await fs.symlink(outsidePath, inlinePath);
+
+    try {
+      await expect(
+        writeDailyDreamingPhaseBlock({
+          workspaceDir,
+          phase: "light",
+          bodyLines: ["- Must stay inside the workspace memory directory"],
+          nowMs,
+          timezone,
+          storage: {
+            mode: "inline",
+            separateReports: false,
+          },
+        }),
+      ).rejects.toThrow("outside workspace memory directory");
+
+      expect((await fs.lstat(inlinePath)).isSymbolicLink()).toBe(true);
+      await expect(fs.readFile(outsidePath, "utf-8")).resolves.toBe("outside workspace\n");
+    } finally {
+      await fs.rm(outsidePath, { force: true });
+    }
   });
 
   it("still writes deep reports to the per-phase report directory", async () => {

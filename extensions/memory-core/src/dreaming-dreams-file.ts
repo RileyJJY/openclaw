@@ -5,6 +5,7 @@ import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import {
   replaceManagedMarkdownBlock,
@@ -108,6 +109,12 @@ async function resolveSafeMarkdownPath(
       throw new Error(`Refusing to write symlinked ${pathDescription}`);
     }
     const resolvedPath = await fs.realpath(filePath);
+    const memoryDir = await fs.realpath(path.dirname(filePath));
+    if (!isPathInside(memoryDir, resolvedPath)) {
+      throw new Error(
+        `Refusing to write symlinked ${pathDescription} outside workspace memory directory`,
+      );
+    }
     const resolvedStat = await fs.stat(resolvedPath);
     if (!resolvedStat.isFile()) {
       throw new Error(`Refusing to write non-file ${pathDescription}`);
