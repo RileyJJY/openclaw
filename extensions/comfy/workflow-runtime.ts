@@ -1,7 +1,5 @@
 // Comfy plugin module implements workflow runtime behavior.
 import { randomInt } from "node:crypto";
-import fs from "node:fs/promises";
-import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
