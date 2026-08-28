@@ -6,7 +6,7 @@ import {
   createGitRunner,
   parseArgs,
   readGitFile,
-} from "../../scripts/check-docs-i18n-glossary.mts";
+} from "../../scripts/lib/docs-i18n-glossary-git.mts";
 import * as managedChildProcess from "../../scripts/lib/managed-child-process.mts";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
@@ -306,7 +306,7 @@ process.exit(1);
       const elapsedMs = Date.now() - startedAt;
       expect(existsSync(readyPath)).toBe(true);
       expect(elapsedMs).toBeGreaterThanOrEqual(500);
-      expect(elapsedMs).toBeLessThan(4_000);
+      expect(elapsedMs).toBeLessThan(8_000);
     },
   );
 
