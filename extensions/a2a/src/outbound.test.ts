@@ -260,7 +260,7 @@ describe("A2A outbound channel delivery", () => {
       url: "https://hermes.example/a2a/v1",
     });
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(`{\"reflected\":\"${outboundToken}\"`, {
+      new Response(`{"reflected":"${outboundToken}"`, {
         headers: { "content-type": "application/json" },
       }),
     );
