@@ -24,6 +24,51 @@ const TELEMETRY_URL = "https://telemetry.openclaw.ai/api/latest-version";
 const TELEMETRY_STATE_KEY = "telemetry.updateCheck";
 const mockHttp = useMockHttp();
 
+function oversizedTelemetryResponse() {
+  const prefix = new TextEncoder().encode('{"version":"2026.8.24","padding":"');
+  const suffix = new TextEncoder().encode('"}');
+  const chunk = new Uint8Array(1024 * 1024).fill(120);
+  const totalPaddingBytes = 32 * 1024 * 1024;
+  let phase = 0;
+  let remaining = totalPaddingBytes;
+  let enqueuedBytes = 0;
+  let canceled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (phase === 0) {
+        phase = 1;
+        enqueuedBytes += prefix.byteLength;
+        controller.enqueue(prefix);
+        return;
+      }
+      if (remaining > 0) {
+        const next = Math.min(remaining, chunk.byteLength);
+        remaining -= next;
+        enqueuedBytes += next;
+        controller.enqueue(chunk.subarray(0, next));
+        return;
+      }
+      controller.enqueue(suffix);
+      controller.close();
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(body, { headers: { "content-type": "application/json" } }),
+    state: {
+      get canceled() {
+        return canceled;
+      },
+      get enqueuedBytes() {
+        return enqueuedBytes;
+      },
+      totalPaddingBytes,
+    },
+  };
+}
+
 function installPluginRegistry(...plugins: Parameters<typeof createPluginRecord>[0][]): void {
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(...plugins.map((plugin) => createPluginRecord(plugin)));
@@ -465,5 +510,26 @@ describe("anonymous telemetry", () => {
 
     expect(result?.note).toHaveLength(500);
     expect(persisted?.note).toHaveLength(500);
+  });
+
+  it("bounds update responses while accepting a legitimate large body", async () => {
+    let response: Response = Response.json({
+      version: "2026.8.24",
+      padding: "x".repeat(1024 * 1024),
+    });
+    const fetchImpl = vi.fn(async () => response);
+
+    await expect(
+      checkTelemetryUpdate({}, { surface: "gateway", fetchImpl, nowMs: NOW }),
+    ).resolves.toEqual({ version: "2026.8.24" });
+
+    const oversized = oversizedTelemetryResponse();
+    response = oversized.response;
+    await expect(
+      checkTelemetryUpdate({}, { surface: "gateway", fetchImpl, nowMs: NOW + DAY_MS + 1 }),
+    ).resolves.toEqual({ version: "2026.8.24" });
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(oversized.state.totalPaddingBytes);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
