@@ -6,6 +6,7 @@
  * uninstall flows). Those stay on focused repair and plugin-state-store subpaths;
  * the deprecated `runtime-doctor` package facade re-exports only this light module.
  */
+import fs from "node:fs/promises";
 import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -442,7 +443,13 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
   ): Promise<ReadSourceResult> => {
     let buffer: Buffer;
     try {
-      ({ buffer } = await readRegularFile({ filePath, maxBytes: limit }));
+      if (limit === undefined) {
+        // Preserve the historical fs.readFile contract for external callers that
+        // omit maxBytes, including following a symlinked legacy source.
+        buffer = await fs.readFile(filePath);
+      } else {
+        ({ buffer } = await readRegularFile({ filePath, maxBytes: limit }));
+      }
     } catch (err) {
       if (
         limit !== undefined &&

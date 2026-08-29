@@ -154,9 +154,10 @@ source remains untouched so the operator can fix it and retry.
 
 #### Bounded legacy JSON imports
 
-The single-file helper keeps the historical unbounded read when `maxBytes` is
-omitted. New migrations that read untrusted or potentially large legacy files
-should opt into a byte limit:
+The single-file helper keeps the historical unbounded `fs.readFile` behavior
+when `maxBytes` is omitted, including following a symlinked legacy source. New
+migrations that read untrusted or potentially large legacy files should opt
+into a byte limit:
 
 ```ts
 defineLegacyJsonStateMigration({
