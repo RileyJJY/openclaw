@@ -125,6 +125,85 @@ describe("dreaming markdown filesystem safety", () => {
     }
   });
 
+  it("rejects a parent-directory swap before an oversized final commit", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-race-");
+    const memoryDir = path.join(workspaceDir, "memory");
+    const originalMemoryDir = path.join(
+      path.dirname(workspaceDir),
+      `${path.basename(workspaceDir)}-memory-original`,
+    );
+    const externalMemoryDir = path.join(
+      path.dirname(workspaceDir),
+      `${path.basename(workspaceDir)}-external-memory`,
+    );
+    const inlinePath = path.join(memoryDir, "2026-04-05.md");
+    const externalPath = path.join(externalMemoryDir, "2026-04-05.md");
+    const original = [
+      "# Daily Memory",
+      "",
+      "A".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+      "",
+      "## Light Sleep",
+      "<!-- openclaw:dreaming:light:start -->",
+      "- Old candidate",
+      "<!-- openclaw:dreaming:light:end -->",
+      "Tail stays.",
+    ].join("\n");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.mkdir(externalMemoryDir, { recursive: true });
+    await fs.writeFile(inlinePath, original, "utf-8");
+    await fs.writeFile(externalPath, original, "utf-8");
+
+    let swapTriggered = false;
+    const originalOpen = fs.open;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (openPath, ...rest) => {
+      const handle = await originalOpen(openPath, ...rest);
+      if (
+        !swapTriggered &&
+        typeof openPath === "string" &&
+        openPath !== inlinePath &&
+        path.basename(openPath) === path.basename(inlinePath)
+      ) {
+        const rawSync = handle.sync.bind(handle) as unknown as (
+          ...args: unknown[]
+        ) => Promise<unknown>;
+        handle.sync = (async (...args: unknown[]) => {
+          if (!swapTriggered) {
+            swapTriggered = true;
+            await fs.rename(memoryDir, originalMemoryDir);
+            await fs.symlink(externalMemoryDir, memoryDir);
+          }
+          return await rawSync(...args);
+        }) as typeof handle.sync;
+      }
+      return handle;
+    });
+
+    try {
+      await expect(
+        writeDailyDreamingPhaseBlock({
+          workspaceDir,
+          phase: "light",
+          bodyLines: ["- Candidate: parent swap must not redirect the commit"],
+          nowMs,
+          timezone,
+          storage: { mode: "inline", separateReports: false },
+        }),
+      ).rejects.toThrow();
+      expect(swapTriggered).toBe(true);
+      await expect(fs.readFile(externalPath, "utf-8")).resolves.toBe(original);
+    } finally {
+      openSpy.mockRestore();
+      if (swapTriggered) {
+        await fs.rm(memoryDir, { force: true, recursive: true });
+        await fs.rename(originalMemoryDir, memoryDir);
+      }
+      await fs.rm(externalMemoryDir, { force: true, recursive: true });
+    }
+
+    await expect(fs.readFile(inlinePath, "utf-8")).resolves.toBe(original);
+  });
+
   it("surfaces oversized streaming temporary-directory cleanup failures", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-cleanup-");
     const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");

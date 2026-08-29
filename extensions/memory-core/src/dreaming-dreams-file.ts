@@ -2,6 +2,7 @@
 import { createReadStream, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -15,6 +16,7 @@ import {
   openLocalFileSafely,
   readRegularFile,
   replaceFileAtomic,
+  root,
 } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
@@ -33,6 +35,7 @@ type DreamsFileLockEntry = {
 
 type ManagedMarkdownUpdateParams = {
   filePath: string;
+  expectedRealPath?: string;
   workspaceDir?: string;
   heading: string;
   startMarker: string;
@@ -91,7 +94,7 @@ async function resolveSafeMarkdownPath(
   filePath: string,
   allowSymlink: boolean,
   workspaceDir?: string,
-): Promise<{ filePath: string; stat: Stats } | null> {
+): Promise<{ filePath: string; realPath?: string; stat: Stats } | null> {
   const pathDescription = DREAMS_FILENAMES.includes(
     path.basename(filePath) as (typeof DREAMS_FILENAMES)[number],
   )
@@ -110,6 +113,18 @@ async function resolveSafeMarkdownPath(
     const canonicalParent = await fs.realpath(path.dirname(filePath));
     if (!isPathInside(workspaceMemoryDir, canonicalParent)) {
       throw new Error(`Refusing to write ${pathDescription} outside workspace memory directory`);
+    }
+  }
+  let canonicalFilePath: string | undefined;
+  try {
+    // Capture the canonical regular-file path before the lstat below. If the
+    // pathname is swapped after this check, streaming will compare the opened
+    // handle's real path with this captured value instead of following the
+    // replacement pathname.
+    canonicalFilePath = await fs.realpath(filePath);
+  } catch (err) {
+    if (extractErrorCode(err) !== "ENOENT") {
+      throw err;
     }
   }
   const stat = await fs.lstat(filePath).catch((err: unknown) => {
@@ -133,12 +148,12 @@ async function resolveSafeMarkdownPath(
     if (!resolvedStat.isFile()) {
       throw new Error(`Refusing to write non-file ${pathDescription}`);
     }
-    return { filePath: resolvedPath, stat: resolvedStat };
+    return { filePath: resolvedPath, realPath: resolvedPath, stat: resolvedStat };
   }
   if (!stat.isFile()) {
     throw new Error(`Refusing to write non-file ${pathDescription}`);
   }
-  return { filePath, stat };
+  return { filePath, realPath: canonicalFilePath, stat };
 }
 
 async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
@@ -157,17 +172,6 @@ async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promi
   });
 }
 
-async function syncParentDirectory(directoryPath: string): Promise<void> {
-  // Mirror replaceFileAtomic's syncParentDir guarantee: fsync the parent
-  // directory after a rename so the directory entry is durable on crash.
-  const dirHandle = await fs.open(directoryPath, "r");
-  try {
-    await dirHandle.sync();
-  } finally {
-    await dirHandle.close();
-  }
-}
-
 function buildManagedMarkdownBlock(params: ManagedMarkdownUpdateParams): string {
   return `${params.heading}\n${params.startMarker}\n${params.body}\n${params.endMarker}`;
 }
@@ -175,13 +179,34 @@ function buildManagedMarkdownBlock(params: ManagedMarkdownUpdateParams): string 
 async function replaceManagedMarkdownBlockStreaming(
   params: ManagedMarkdownUpdateParams,
 ): Promise<void> {
-  const tempDir = await fs.mkdtemp(
-    path.join(path.dirname(params.filePath), `${params.tempPrefix}-`),
-  );
-  const tempPath = path.join(tempDir, path.basename(params.filePath));
+  if (!params.workspaceDir) {
+    throw new Error("Streaming managed Markdown replacement requires a workspace directory");
+  }
+  const canonicalWorkspaceDir = await fs.realpath(params.workspaceDir);
+  const workspaceRoot = await root(canonicalWorkspaceDir);
+  // resolveSafeMarkdownPath captures existing files' real paths before this
+  // function starts. Keep that captured path; resolving it again here would
+  // follow a pathname that may have been swapped after the containment check.
+  const canonicalFilePath = params.expectedRealPath ?? params.filePath;
+  if (!isPathInside(canonicalWorkspaceDir, canonicalFilePath)) {
+    throw new Error("Refusing to stream a managed Markdown file outside the workspace");
+  }
+  const relativeTargetPath = path.relative(canonicalWorkspaceDir, canonicalFilePath);
+  if (
+    !relativeTargetPath ||
+    relativeTargetPath === "." ||
+    relativeTargetPath === ".." ||
+    relativeTargetPath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeTargetPath)
+  ) {
+    throw new Error("Refusing to stream a managed Markdown file outside the workspace");
+  }
+  const relativeTargetPathForRoot = relativeTargetPath.split(path.sep).join(path.posix.sep);
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), `${params.tempPrefix}-`));
+  const tempPath = path.join(tempDir, path.basename(canonicalFilePath));
   let input: FileHandle | undefined;
   let output: FileHandle | undefined;
-  const withheldPath = path.join(tempDir, `${path.basename(params.filePath)}.withheld`);
+  const withheldPath = path.join(tempDir, `${path.basename(canonicalFilePath)}.withheld`);
   let withheldFile: FileHandle | undefined;
   const describeError = (error: unknown): string => {
     if (error instanceof Error) {
@@ -207,8 +232,11 @@ async function replaceManagedMarkdownBlockStreaming(
     }
   };
   try {
-    const opened = await openLocalFileSafely({ filePath: params.filePath });
+    const opened = await openLocalFileSafely({ filePath: canonicalFilePath });
     input = opened.handle;
+    if (opened.realPath !== canonicalFilePath) {
+      throw new Error("Managed Markdown source path changed during streaming setup");
+    }
     const inputSize = opened.stat.size;
     const mode = opened.stat.mode & 0o777;
     output = await fs.open(tempPath, "wx", mode);
@@ -467,11 +495,14 @@ async function replaceManagedMarkdownBlockStreaming(
     await output.sync();
     await output.close();
     output = undefined;
-    // Mirror replaceFileAtomic's syncTempFile + syncParentDir protocol: the
-    // rewritten bytes are fsynced above, and the rename is made durable by
-    // fsyncing the parent directory before the temporary dir is removed.
-    await fs.rename(tempPath, params.filePath);
-    await syncParentDirectory(path.dirname(params.filePath));
+    // Commit through the root-relative writer. It pins traversal beneath the
+    // checked workspace root and keeps a parent-directory swap from turning
+    // the final write into an external pathname operation.
+    await workspaceRoot.copyIn(relativeTargetPathForRoot, tempPath, {
+      mode,
+      mkdir: false,
+      sourceHardlinks: "reject",
+    });
   } catch (err) {
     await input?.close().catch(() => undefined);
     await output?.close().catch(() => undefined);
@@ -496,6 +527,7 @@ export async function updateManagedDreamingMarkdownFile(
   const resolvedParams = {
     ...params,
     filePath: resolved?.filePath ?? params.filePath,
+    expectedRealPath: resolved?.realPath,
   };
   const stat = resolved?.stat ?? null;
   if (!stat || stat.size <= MEMORY_DREAMING_MARKDOWN_MAX_BYTES) {
