@@ -230,6 +230,30 @@ describe("defineLegacyJsonStateMigration", () => {
     ).resolves.toEqual({ preview: ["loaded"] });
   });
 
+  it("follows symlinked legacy sources when maxBytes is omitted", async () => {
+    const sourcePath = path.join(stateDir, "legacy.json");
+    const targetPath = path.join(stateDir, "legacy-target.json");
+    const source = JSON.stringify({ value: "symlinked" });
+    await fs.writeFile(targetPath, source, "utf8");
+    await fs.symlink(targetPath, sourcePath);
+
+    const migration = createJsonMigration();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const context: PluginDoctorStateMigrationContext = {
+      openPluginStateKeyedStore: (options) =>
+        createPluginStateKeyedStore("migration-symlink-fixture", { ...options, env }),
+    };
+    const params = detectParams(stateDir, context);
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({ preview: ["loaded"] });
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [expect.stringContaining("Archived runtime doctor JSON test legacy source")],
+      warnings: [],
+    });
+    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toBe(source);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+  });
+
   it("honors an explicit maxBytes limit", async () => {
     const sourcePath = path.join(stateDir, "legacy.json");
     await fs.writeFile(sourcePath, JSON.stringify({ value: "x".repeat(256) }), "utf8");
