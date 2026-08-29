@@ -251,4 +251,32 @@ describe("A2A outbound channel delivery", () => {
     );
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+
+  it("does not retain reflected outbound credentials in malformed responses", async () => {
+    const outboundToken = "outbound-secret-token";
+    const cfg = createA2aOutboundConfig({
+      token: "inbound-token",
+      outboundToken,
+      url: "https://hermes.example/a2a/v1",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(`{\"reflected\":\"${outboundToken}\"`, {
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const failure = await sendA2aChannelText({ cfg, to: "hermes", text: "hello" }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
+      throw new Error("expected malformed peer response to reject");
+    }
+    expect(failure.message).toBe("peer hermes A2A response: malformed JSON response");
+    expect(failure.message).not.toContain(outboundToken);
+    expect(String(failure.cause)).not.toContain(outboundToken);
+    expect(failure.cause).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });

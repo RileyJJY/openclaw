@@ -98,7 +98,9 @@ export async function sendA2aChannelText(
       }
 
       const parsed = A2aOutboundResponseSchema.safeParse(
-        await readProviderJsonResponse(response, `peer ${peerName} A2A response`),
+        await readProviderJsonResponse(response, `peer ${peerName} A2A response`, {
+          requestHeaders: headers,
+        }),
       );
       if (!parsed.success) {
         throw new Error(`peer ${peerName} returned an invalid A2A JSON-RPC response`);
