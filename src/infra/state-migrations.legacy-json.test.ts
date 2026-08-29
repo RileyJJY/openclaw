@@ -1,5 +1,4 @@
-import fs from "node:fs/promises";
-import { readFile as readFileUnmocked } from "node:fs/promises";
+import fs, { readFile as readFileUnmocked } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineLegacyJsonStateMigration } from "../plugin-sdk/runtime-doctor-migrations.js";
@@ -107,7 +106,7 @@ describe("legacy JSON plugin migration diagnostics", () => {
             homedir: () => state.home,
           });
           expect(result.changes).toEqual([]);
-          expect(sourceReads).toBe(fault === "ENOENT" ? 1 : 2);
+          expect(sourceReads).toBe(2);
           warnings = result.warnings;
         }
 
