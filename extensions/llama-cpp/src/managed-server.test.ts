@@ -312,4 +312,59 @@ describe("managed llama-server", () => {
       },
     });
   });
+
+  it("bounds inspection responses while accepting a legitimate large metrics body", async () => {
+    let metricsBody = "x".repeat(1024 * 1024);
+    const server = http.createServer((req, res) => {
+      if (req.url?.startsWith("/metrics?")) {
+        res.setHeader("content-type", "text/plain");
+        res.end(metricsBody);
+        return;
+      }
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/health") {
+        res.end(JSON.stringify({ status: "ok" }));
+        return;
+      }
+      if (req.url === "/models") {
+        res.end(JSON.stringify({ data: [{ id: "embedding-model" }] }));
+        return;
+      }
+      if (req.url?.startsWith("/props?")) {
+        res.end(JSON.stringify({ modalities: { vision: false } }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end("{}");
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing test server address");
+    }
+    const inspect = () =>
+      inspectLlamaServerRuntime({
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        modelId: "embedding-model",
+      });
+
+    await expect(inspect()).resolves.toMatchObject({
+      state: "ready",
+      endpoints: { metrics: "ready" },
+    });
+
+    metricsBody = "x".repeat(32 * 1024 * 1024);
+    await expect(inspect()).resolves.toMatchObject({
+      state: "failed",
+      endpoints: {
+        health: "ready",
+        models: "ready",
+        props: "ready",
+        metrics: "unavailable",
+      },
+    });
+  });
 });
