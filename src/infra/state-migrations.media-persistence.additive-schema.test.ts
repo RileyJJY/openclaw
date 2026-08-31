@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { AGENT_MEDIA_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -127,6 +128,91 @@ describe("legacy media persistence additive schema repair", () => {
       ).toEqual({ name: "idx_agent_transcript_event_identity_sequence" });
     } finally {
       repaired.close();
+    }
+  });
+
+  it("rolls back v17 additive preflight when canonical validation rejects drift", async () => {
+    const stateDir = makeTempDir(tempDirs, "media-persistence-v17-rollback-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const databasePath = opened.path;
+    opened.db
+      .prepare(
+        `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(
+        "agent:main:v17-rollback",
+        "v17-rollback",
+        JSON.stringify({ sessionId: "v17-rollback", updatedAt: 1 }),
+        1,
+      );
+    opened.db
+      .prepare(
+        `INSERT INTO session_windows (
+           session_id, session_key, created_at, updated_at
+         ) VALUES (?, ?, ?, ?)`,
+      )
+      .run("v17-rollback", "agent:main:v17-rollback", 1, 1);
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec(`
+        DROP TABLE session_participants;
+        DROP TRIGGER session_conversations_route_context_invalidate_after_update;
+        DROP INDEX idx_agent_session_conversations_conversation;
+        ALTER TABLE session_conversations DROP COLUMN route_context_json;
+        DROP TRIGGER session_nodes_entry_valid_after_insert;
+        DROP TRIGGER session_nodes_entry_valid_after_entry_update;
+        DROP TRIGGER session_nodes_entry_valid_after_identity_update;
+        DROP INDEX idx_agent_session_nodes_entry_valid_pending;
+        DROP TABLE session_key_contract;
+        ALTER TABLE session_nodes DROP COLUMN entry_valid;
+        CREATE UNIQUE INDEX idx_test_unexpected_v17 ON session_windows(session_id);
+        PRAGMA user_version = ${AGENT_MEDIA_SCHEMA_VERSION};
+        UPDATE schema_meta
+           SET schema_version = ${AGENT_MEDIA_SCHEMA_VERSION}
+         WHERE meta_key = 'primary';
+      `);
+    } finally {
+      database.close();
+    }
+
+    const result = await migrateLegacyMediaPersistence({ env });
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("unexpected unique index");
+    closeOpenClawAgentDatabasesForTest();
+
+    const rolledBack = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(rolledBack.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: AGENT_MEDIA_SCHEMA_VERSION,
+      });
+      expect(
+        rolledBack
+          .prepare("SELECT name FROM pragma_table_info('session_conversations') WHERE name = ?")
+          .get("route_context_json"),
+      ).toBeUndefined();
+      expect(
+        rolledBack
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
+          .get("session_conversations_route_context_invalidate_after_update"),
+      ).toBeUndefined();
+      expect(
+        rolledBack
+          .prepare("SELECT name FROM pragma_table_info('session_nodes') WHERE name = ?")
+          .get("entry_valid"),
+      ).toBeUndefined();
+      expect(
+        rolledBack
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get("session_key_contract"),
+      ).toBeUndefined();
+    } finally {
+      rolledBack.close();
     }
   });
 
