@@ -1306,12 +1306,32 @@ extension OnboardingAISetupModel {
         let token = self.attemptToken
         let authAttemptID = self.authAttemptID
         Task {
+            var requestLease = serverLease
             do {
-                let data = try await self.gateway.request(
-                    method: "wizard.next",
-                    params: params,
-                    timeoutMs: Self.providerAuthRequestTimeoutMs,
-                    ifCurrentServerLease: serverLease)
+                let data: Data
+                do {
+                    data = try await self.gateway.request(
+                        method: "wizard.next",
+                        params: params,
+                        timeoutMs: Self.providerAuthRequestTimeoutMs,
+                        ifCurrentServerLease: requestLease)
+                } catch is OpenClawChatTransportSendError {
+                    // A stale lease is rejected before dispatch. Reacquire only the same route
+                    // and retry once; a post-dispatch cancellation remains ambiguous and must
+                    // continue through the existing cancellation/reconciliation path.
+                    requestLease = try await self.gateway.acquireServerLease(
+                        ifSameRouteAs: requestLease,
+                        timeoutMs: 5000)
+                    guard token == self.attemptToken, authAttemptID == self.authAttemptID else {
+                        throw CancellationError()
+                    }
+                    self.serverLease = requestLease
+                    data = try await self.gateway.request(
+                        method: "wizard.next",
+                        params: params,
+                        timeoutMs: Self.providerAuthRequestTimeoutMs,
+                        ifCurrentServerLease: requestLease)
+                }
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
                 let result = try JSONDecoder().decode(WizardNextResult.self, from: data)
                 self.applyAuthWizardResult(
@@ -1321,13 +1341,13 @@ extension OnboardingAISetupModel {
                     error: result.error,
                     preparedModelRef: result.preparedmodelref)
             } catch {
-                let cancellation = await self.gateway.cancelWizardSession(sessionID, on: serverLease)
+                let cancellation = await self.gateway.cancelWizardSession(sessionID, on: requestLease)
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
                 if cancellation != .cancelled,
                    await self.reconcileProviderAuthAfterUnknownOutcome(
                        token: token,
                        before: self.lastDetectedActivationState,
-                       originalServerLease: serverLease)
+                       originalServerLease: requestLease)
                 {
                     return
                 }

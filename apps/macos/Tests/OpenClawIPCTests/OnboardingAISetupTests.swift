@@ -836,6 +836,94 @@ struct OnboardingAISetupTests {
         #expect(OnboardingAISetupModel.providerAuthRequestTimeoutMs > 15 * 60 * 1000)
     }
 
+    @Test func `provider auth retries a callback after socket rotation before dispatch`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingProviderAuthLeaseRetryTests"))
+        let recorder = AISetupRequestRecorder()
+        let socketGeneration = AISetupSocketGeneration()
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            let generation = socketGeneration.claim()
+            return GatewayTestWebSocketTask(
+                sendHook: { task, message, sendIndex in
+                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
+                    if respondToAISetupHealth(task: task, request: request) {
+                        return
+                    }
+                    await recorder.record(message)
+                    switch request.method {
+                    case "openclaw.setup.detect":
+                        task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
+                    case "openclaw.setup.auth.start":
+                        let sessionID = try #require(request.params["sessionId"] as? String)
+                        task.emitReceiveSuccess(.data(Data(
+                            """
+                            {"type":"res","id":"\(request.id)","ok":true,"payload":{
+                              "sessionId":"\(sessionID)","done":false,"status":"running",
+                              "step":{"id":"login","type":"text","executor":"client",
+                                "message":"Enter the sign-in response"}}}
+                            """.utf8)))
+                    case "wizard.next":
+                        #expect(generation == 1, "the callback must be sent on the replacement socket")
+                        let sessionID = try #require(request.params["sessionId"] as? String)
+                        task.emitReceiveSuccess(.data(wizardDoneResponse(
+                            id: request.id,
+                            sessionID: sessionID)))
+                    case "wizard.cancel":
+                        Issue.record("pre-dispatch callback failure should not cancel the wizard")
+                        task.emitReceiveSuccess(.data(Data(
+                            #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"status":"cancelled"}}"#
+                                .utf8)))
+                    default:
+                        Issue.record("Unexpected provider auth request: \(request.method)")
+                    }
+                },
+                receiveHook: { task, receiveIndex in
+                    if receiveIndex == 0 {
+                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                    }
+                    return .data(GatewayWebSocketTestSupport.connectOkData(
+                        id: task.snapshotConnectRequestID() ?? "connect"))
+                })
+        })
+        let gateway = makeAISetupGateway(url: url, session: session)
+        let model = makeAISetupModel(gateway: gateway, defaults: defaults)
+
+        await model.detectAndAutoConnect()
+        let option = OnboardingAISetupModel.AuthOption(
+            id: "test-provider-login", brandId: nil, label: "Test provider", hint: nil,
+            groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false)
+        model.startProviderAuth(option)
+        for _ in 0..<400 where model.authStep == nil {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(model.authStep?.id == "login")
+        let originalLease = try #require(await gateway.captureServerLease())
+        let originalTask = try #require(session.latestTask())
+        originalTask.emitReceiveFailure()
+
+        var replacementReady = false
+        for _ in 0..<600 {
+            if !(await gateway.isCurrentServerLease(originalLease)),
+               await gateway.captureServerLease() != nil
+            {
+                replacementReady = true
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(replacementReady)
+
+        model.continueProviderAuth()
+        let requests = await waitForAISetupRequests(recorder, count: 4)
+
+        #expect(requests.methods.filter { $0 == "wizard.next" }.count == 1)
+        #expect(!requests.methods.contains("wizard.cancel"))
+        #expect(model.authError == nil)
+        #expect(model._test_authSessionID == nil)
+        #expect(model.authStep == nil)
+        await gateway.shutdown()
+    }
+
     @Test func `reconciliation deadline recomputes each RPC budget`() async throws {
         let deadline = OnboardingAISetupModel.ReconciliationDeadline(timeout: .seconds(2))
         let detectionBudget = deadline.remainingMilliseconds(cappedAt: 10000)
