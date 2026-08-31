@@ -557,6 +557,45 @@ describe("createCopilotByokProxy", () => {
     }
   });
 
+  it("forwards a request exactly at the documented aggregate body limit", async () => {
+    let forwardedBody: Buffer | undefined;
+    ssrfRuntimeMock.fetchWithSsrFGuard.mockImplementation(
+      async ({ init }: Parameters<typeof fetchWithSsrFGuard>[0]) => {
+        forwardedBody = Buffer.from(
+          await new Response(init?.body as BodyInit | null | undefined).arrayBuffer(),
+        );
+        return {
+          response: new Response(null, { status: 204 }),
+          release: vi.fn(async () => undefined),
+        };
+      },
+    );
+    const body = Buffer.alloc(PROXY_MAX_REQUEST_BODY_BYTES, 0x5a);
+    const proxy = await createCopilotByokProxy(
+      resolveCopilotProvider({
+        model: {
+          provider: "custom-proxy",
+          api: "openai-responses",
+          id: "proxy-model",
+          baseUrl: "https://proxy.example/v1",
+        },
+      }),
+    );
+
+    try {
+      const response = await fetch(`${proxy?.provider.provider?.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+
+      expect(response.status).toBe(204);
+      expect(forwardedBody?.equals(body)).toBe(true);
+    } finally {
+      await proxy?.close();
+    }
+  });
+
   it("accepts Azure SDK paths that are rebuilt from the proxy origin", async () => {
     ssrfRuntimeMock.fetchWithSsrFGuard.mockResolvedValue({
       response: new Response("azure-ok", { status: 200 }),

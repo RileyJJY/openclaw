@@ -5,7 +5,12 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
@@ -264,37 +269,25 @@ async function readGuardedBody(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<Buffer<ArrayBuffer> | undefined> {
-  const guard = installRequestBodyLimitGuard(req, res, {
-    maxBytes: PROXY_MAX_REQUEST_BODY_BYTES,
-    timeoutMs: PROXY_REQUEST_BODY_TIMEOUT_MS,
-    responseFormat: "text",
-  });
-  if (guard.isTripped()) {
-    return undefined;
-  }
   try {
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) {
-      if (guard.isTripped()) {
-        break;
-      }
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      if (guard.isTripped()) {
-        chunks.pop();
-        break;
-      }
-    }
-    if (guard.isTripped()) {
-      return undefined;
-    }
-    return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+    const body = await readRequestBodyWithLimit(req, {
+      maxBytes: PROXY_MAX_REQUEST_BODY_BYTES,
+      timeoutMs: PROXY_REQUEST_BODY_TIMEOUT_MS,
+      encoding: "buffer",
+      destroyOnLimit: false,
+    });
+    return body.length > 0 ? body : undefined;
   } catch (error) {
-    if (guard.isTripped()) {
+    if (isRequestBodyLimitError(error)) {
+      await sendHttpRequestRejection(
+        req,
+        res,
+        error.statusCode,
+        requestBodyErrorToText(error.code),
+      );
       return undefined;
     }
     throw error;
-  } finally {
-    guard.dispose();
   }
 }
 

@@ -106,6 +106,11 @@ export type ReadRequestBodyOptions = {
   destroyOnLimit?: boolean;
 };
 
+type ReadRequestBodyBufferOptions = Omit<ReadRequestBodyOptions, "encoding"> & {
+  /** Return the original bytes without decoding them as text. */
+  encoding: "buffer";
+};
+
 type RequestBodyLimitValues = {
   maxBytes: number;
   timeoutMs: number;
@@ -325,12 +330,21 @@ export async function readResponseTextSnippet(
   return prefix.truncated ? `${collapsed}…` : collapsed;
 }
 
-export async function readRequestBodyWithLimit(
+export function readRequestBodyWithLimit(
+  req: IncomingMessage,
+  options: ReadRequestBodyBufferOptions,
+): Promise<Buffer<ArrayBuffer>>;
+export function readRequestBodyWithLimit(
   req: IncomingMessage,
   options: ReadRequestBodyOptions,
-): Promise<string> {
+): Promise<string>;
+export async function readRequestBodyWithLimit(
+  req: IncomingMessage,
+  options: ReadRequestBodyOptions | ReadRequestBodyBufferOptions,
+): Promise<string | Buffer> {
   const { maxBytes, timeoutMs } = resolveRequestBodyLimitValues(options);
-  const encoding = options.encoding ?? "utf-8";
+  const returnBuffer = options.encoding === "buffer";
+  const encoding: BufferEncoding = returnBuffer ? "utf-8" : (options.encoding ?? "utf-8");
   const destroyOnLimit = options.destroyOnLimit !== false;
 
   if (isHttpConnectionClosing(req.socket)) {
@@ -344,7 +358,7 @@ export async function readRequestBodyWithLimit(
     throw error;
   }
 
-  return await new Promise((resolve, reject) => {
+  return await new Promise<string | Buffer>((resolve, reject) => {
     let done = false;
     let totalBytes = 0;
     const chunks: Buffer[] = [];
@@ -396,13 +410,10 @@ export async function readRequestBodyWithLimit(
         fail(new RequestBodyLimitError({ code: "CONNECTION_CLOSED" }));
         return;
       }
-      finish(() =>
-        resolve(
-          chunks.length === 1
-            ? chunks[0]!.toString(encoding)
-            : Buffer.concat(chunks).toString(encoding),
-        ),
-      );
+      finish(() => {
+        const body = chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks);
+        resolve(returnBuffer ? body : body.toString(encoding));
+      });
     };
 
     const onError = (error: Error) => {
