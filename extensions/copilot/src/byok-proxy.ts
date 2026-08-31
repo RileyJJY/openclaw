@@ -5,10 +5,15 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
 const PROXY_CREDENTIAL_HEADER_PREFIX = "x-openclaw-copilot-byok-";
+// Two supported 6 MiB images are about 16 MiB after base64 encoding; keep
+// room for the JSON request envelope while retaining a bounded proxy body.
+const PROXY_MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
+const PROXY_REQUEST_BODY_TIMEOUT_MS = 30_000;
 
 type CopilotByokProxyHandle = {
   close: () => Promise<void>;
@@ -139,7 +144,11 @@ async function handleProxyRequest(
       res.end("Not found");
       return;
     }
-    const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
+    const body =
+      req.method === "GET" || req.method === "HEAD" ? undefined : await readGuardedBody(req, res);
+    if (res.headersSent || res.writableEnded) {
+      return;
+    }
     guarded = await fetchWithSsrFGuard({
       url: url.toString(),
       init: {
@@ -251,12 +260,42 @@ function hasValidProxyCredential(
   );
 }
 
-async function readBody(req: IncomingMessage): Promise<Buffer<ArrayBuffer> | undefined> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+async function readGuardedBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<Buffer<ArrayBuffer> | undefined> {
+  const guard = installRequestBodyLimitGuard(req, res, {
+    maxBytes: PROXY_MAX_REQUEST_BODY_BYTES,
+    timeoutMs: PROXY_REQUEST_BODY_TIMEOUT_MS,
+    responseFormat: "text",
+  });
+  if (guard.isTripped()) {
+    return undefined;
   }
-  return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      if (guard.isTripped()) {
+        break;
+      }
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      if (guard.isTripped()) {
+        chunks.pop();
+        break;
+      }
+    }
+    if (guard.isTripped()) {
+      return undefined;
+    }
+    return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+  } catch (error) {
+    if (guard.isTripped()) {
+      return undefined;
+    }
+    throw error;
+  } finally {
+    guard.dispose();
+  }
 }
 
 function normalizeProxyRequestHeaders(
