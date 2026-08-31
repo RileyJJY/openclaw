@@ -237,6 +237,15 @@ function malformedBedrockEmbeddingResponse(): Error {
   return new Error("Amazon Bedrock embedding response returned malformed JSON");
 }
 
+// Bedrock returns JSON as bytes; reject invalid UTF-8 instead of admitting replacement characters.
+function decodeBedrockEmbeddingResponseBody(body: Uint8Array): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    throw malformedBedrockEmbeddingResponse();
+  }
+}
+
 function asNumberArray(value: unknown): number[] {
   if (!Array.isArray(value)) {
     throw malformedBedrockEmbeddingResponse();
@@ -329,7 +338,7 @@ export async function createBedrockEmbeddingProvider(
         }),
         signal ? { abortSignal: signal } : undefined,
       );
-      return new TextDecoder().decode(res.body);
+      return decodeBedrockEmbeddingResponseBody(res.body);
     } finally {
       sdk.destroy();
     }

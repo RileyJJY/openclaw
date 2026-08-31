@@ -415,6 +415,25 @@ describe("bedrock embedding response parsing", () => {
       "Amazon Bedrock embedding response returned malformed JSON",
     );
   });
+
+  it("rejects malformed UTF-8 response bytes through the provider boundary", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"embedding":[3,4],"ignored":"bad'),
+      0xff,
+      ...new TextEncoder().encode('"}'),
+    ]);
+    vi.spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      body,
+    } as never);
+    const { provider } = await createBedrockEmbeddingProvider({
+      config: {},
+      model: "amazon.titan-embed-text-v2:0",
+    });
+
+    await expect(provider.embed("private memory", { inputType: "query" })).rejects.toThrow(
+      "Amazon Bedrock embedding response returned malformed JSON",
+    );
+  });
 });
 
 describe("bedrock embedding inference profiles", () => {
