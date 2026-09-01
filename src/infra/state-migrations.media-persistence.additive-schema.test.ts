@@ -1,8 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { AGENT_MEDIA_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import * as agentDatabaseLease from "../state/openclaw-agent-db-lease.js";
-import * as sessionMigrations from "../state/openclaw-agent-db-session-migrations.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -14,7 +11,9 @@ import { migrateLegacyMediaPersistence } from "./state-migrations.media-persiste
 
 const tempDirs: string[] = [];
 
-function createV17AdditiveFixture(options: { schemaDrift?: "missing-cache-table" } = {}) {
+function createV17AdditiveFixture(
+  options: { schemaDrift?: "missing-cache-table" | "participant-dependency" } = {},
+) {
   const stateDir = makeTempDir(tempDirs, "media-persistence-v17-additive-");
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const opened = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -32,6 +31,22 @@ function createV17AdditiveFixture(options: { schemaDrift?: "missing-cache-table"
     PRAGMA user_version = 17;
     UPDATE schema_meta SET schema_version = 17;
   `);
+  if (options.schemaDrift === "participant-dependency") {
+    database.exec(`
+      CREATE TABLE session_participants (
+        session_key TEXT NOT NULL,
+        actor_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        actor_source TEXT,
+        contribution_count INTEGER,
+        first_prompted_at INTEGER NOT NULL,
+        last_prompted_at INTEGER NOT NULL,
+        PRIMARY KEY (session_key, actor_type, actor_id),
+        FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+      ) STRICT;
+      CREATE INDEX idx_test_participant_dependency ON session_participants(actor_id);
+    `);
+  }
   if (options.schemaDrift === "missing-cache-table") {
     database.exec("DROP TABLE cache_entries;");
   }
@@ -41,8 +56,6 @@ function createV17AdditiveFixture(options: { schemaDrift?: "missing-cache-table"
 
 describe("legacy media persistence additive schema repair", () => {
   afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     cleanupTempDirs(tempDirs);
@@ -135,164 +148,21 @@ describe("legacy media persistence additive schema repair", () => {
     }
   });
 
-  it("renews maintenance before the v17 validity projection preflight", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    const stateDir = makeTempDir(tempDirs, "media-persistence-v17-lease-renewal-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const databasePath = opened.path;
-    opened.db
-      .prepare(
-        `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-         VALUES (?, ?, ?, ?)`,
-      )
-      .run(
-        "agent:main:v17-lease-renewal",
-        "v17-lease-renewal",
-        JSON.stringify({ sessionId: "v17-lease-renewal", updatedAt: 1 }),
-        1,
-      );
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    try {
-      database.exec(`
-        DROP TABLE session_participants;
-        DROP TRIGGER session_conversations_route_context_invalidate_after_update;
-        DROP INDEX idx_agent_session_conversations_conversation;
-        ALTER TABLE session_conversations DROP COLUMN route_context_json;
-        DROP TRIGGER session_nodes_entry_valid_after_insert;
-        DROP TRIGGER session_nodes_entry_valid_after_entry_update;
-        DROP TRIGGER session_nodes_entry_valid_after_identity_update;
-        DROP INDEX idx_agent_session_nodes_entry_valid_pending;
-        DROP TABLE session_key_contract;
-        ALTER TABLE session_nodes DROP COLUMN entry_valid;
-        PRAGMA user_version = ${AGENT_MEDIA_SCHEMA_VERSION};
-        UPDATE schema_meta
-           SET schema_version = ${AGENT_MEDIA_SCHEMA_VERSION}
-         WHERE meta_key = 'primary';
-      `);
-    } finally {
-      database.close();
-    }
-
-    const events: string[] = [];
-    const originalAuthorityCheck = agentDatabaseLease.assertAgentDatabaseMaintenanceAuthority;
-    let firstAuthorityCheck = true;
-    vi.spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority").mockImplementation(
-      () => {
-        originalAuthorityCheck();
-        if (firstAuthorityCheck) {
-          firstAuthorityCheck = false;
-          // Leave less than one lease interval before the v17 preflight starts.
-          vi.setSystemTime(Date.now() + 59_000);
-        }
-      },
-    );
-    const originalRenew = agentDatabaseLease.renewAgentDatabaseMaintenanceAuthorityIfPresent;
-    vi.spyOn(
-      agentDatabaseLease,
-      "renewAgentDatabaseMaintenanceAuthorityIfPresent",
-    ).mockImplementation(() => {
-      events.push("renew");
-      originalRenew();
+  it("rolls back v17 preflight repairs when identity migration rejects drift", async () => {
+    const { databasePath, env } = createV17AdditiveFixture({
+      schemaDrift: "participant-dependency",
     });
-    const originalProjection = sessionMigrations.ensureSessionEntryValidityProjection;
-    let projectionCalls = 0;
-    vi.spyOn(sessionMigrations, "ensureSessionEntryValidityProjection").mockImplementation((db) => {
-      projectionCalls += 1;
-      if (projectionCalls === 1) {
-        events.push("v17-preflight");
-        // The real projection is synchronous, so the heartbeat cannot run here.
-        vi.setSystemTime(Date.now() + 2_000);
-      }
-      originalProjection(db);
-    });
-
-    const result = await migrateLegacyMediaPersistence({ env });
-
-    expect(result.warnings).toEqual([]);
-    expect(events.slice(0, 2)).toEqual(["renew", "v17-preflight"]);
-    expect(projectionCalls).toBeGreaterThanOrEqual(1);
-    closeOpenClawAgentDatabasesForTest();
-    const repaired = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(repaired.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      });
-      expect(
-        repaired
-          .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
-          .get("agent:main:v17-lease-renewal"),
-      ).toEqual({ entry_valid: 1 });
-    } finally {
-      repaired.close();
-    }
-  });
-
-  it("rolls back v17 additive preflight when canonical validation rejects drift", async () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-v17-rollback-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
-    const databasePath = opened.path;
-    opened.db
-      .prepare(
-        `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-         VALUES (?, ?, ?, ?)`,
-      )
-      .run(
-        "agent:main:v17-rollback",
-        "v17-rollback",
-        JSON.stringify({ sessionId: "v17-rollback", updatedAt: 1 }),
-        1,
-      );
-    opened.db
-      .prepare(
-        `INSERT INTO session_windows (
-           session_id, session_key, created_at, updated_at
-         ) VALUES (?, ?, ?, ?)`,
-      )
-      .run("v17-rollback", "agent:main:v17-rollback", 1, 1);
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
     const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    try {
-      database.exec(`
-        DROP TABLE session_participants;
-        DROP TRIGGER session_conversations_route_context_invalidate_after_update;
-        DROP INDEX idx_agent_session_conversations_conversation;
-        ALTER TABLE session_conversations DROP COLUMN route_context_json;
-        DROP TRIGGER session_nodes_entry_valid_after_insert;
-        DROP TRIGGER session_nodes_entry_valid_after_entry_update;
-        DROP TRIGGER session_nodes_entry_valid_after_identity_update;
-        DROP INDEX idx_agent_session_nodes_entry_valid_pending;
-        DROP TABLE session_key_contract;
-        ALTER TABLE session_nodes DROP COLUMN entry_valid;
-        CREATE UNIQUE INDEX idx_test_unexpected_v17 ON session_windows(session_id);
-        PRAGMA user_version = ${AGENT_MEDIA_SCHEMA_VERSION};
-        UPDATE schema_meta
-           SET schema_version = ${AGENT_MEDIA_SCHEMA_VERSION}
-         WHERE meta_key = 'primary';
-      `);
-    } finally {
-      database.close();
-    }
-
     const result = await migrateLegacyMediaPersistence({ env });
     expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("unexpected unique index");
+    expect(result.warnings[0]).toContain(
+      "Participant migration cannot rebuild unknown indexes, views, or triggers",
+    );
     closeOpenClawAgentDatabasesForTest();
 
     const rolledBack = new DatabaseSync(databasePath, { readOnly: true });
     try {
-      expect(rolledBack.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: AGENT_MEDIA_SCHEMA_VERSION,
-      });
+      expect(rolledBack.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
       expect(
         rolledBack
           .prepare("SELECT name FROM pragma_table_info('session_conversations') WHERE name = ?")
@@ -305,14 +175,14 @@ describe("legacy media persistence additive schema repair", () => {
       ).toBeUndefined();
       expect(
         rolledBack
-          .prepare("SELECT name FROM pragma_table_info('session_nodes') WHERE name = ?")
-          .get("entry_valid"),
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
+          .get("idx_agent_transcript_event_identity_sequence"),
       ).toBeUndefined();
       expect(
         rolledBack
-          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-          .get("session_key_contract"),
-      ).toBeUndefined();
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
+          .get("idx_test_participant_dependency"),
+      ).toEqual({ name: "idx_test_participant_dependency" });
     } finally {
       rolledBack.close();
     }

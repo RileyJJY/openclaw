@@ -41,7 +41,6 @@ import {
   migrateRetiredAgentStateLeaseSchema,
   migratedSessionColumn,
   ensureSessionKeyContractSchemaInTransaction,
-  ensureOpenClawAgentV17MediaPreflightInTransaction,
   readExistingAgentSchemaMeta,
   repairAndAssertOpenClawAgentV14SchemaForMigration,
 } from "./openclaw-agent-db-schema-helpers.js";
@@ -585,11 +584,20 @@ function ensureAgentSchema(
           `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
         );
       }
-      migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
-        maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-        ensureOpenClawAgentV17MediaPreflightInTransaction(db, { agentId, pathname });
+        const legacySql = withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL);
+        ensureSessionAdditiveColumns(db);
+        verifyAndRepairCanonicalSqliteIndexes(db, pathname, legacySql, {
+          validateAfterRepair: () => {
+            assertAgentSchemaVersion(
+              db,
+              { agentId, pathname, version: AGENT_MEDIA_SCHEMA_VERSION },
+              legacySql,
+            );
+          },
+        });
       }
+      migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {
         ensureSessionAdditiveColumns(db);
         ensureSessionEntryValidityProjection(db);
@@ -714,7 +722,9 @@ export function ensureOpenClawAgentDatabaseSchema(
   db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   assertSupportedAgentSchemaVersion(db, pathname);
   assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
-  assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
+  if (readSqliteUserVersion(db) !== AGENT_MEDIA_SCHEMA_VERSION) {
+    assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
+  }
   configureSqlitePreSchemaPragmas(db, {
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });

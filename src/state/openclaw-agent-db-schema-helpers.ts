@@ -7,10 +7,7 @@ import {
   hasLegacyMemoryRecallMetadataColumns,
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
-import {
-  repairCanonicalSqliteIndexes,
-  verifyAndRepairCanonicalSqliteIndexes,
-} from "../infra/sqlite-index-schema.js";
+import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
@@ -39,10 +36,7 @@ import {
 } from "./openclaw-agent-db-session-migrations.js";
 import { SESSION_GOAL_OPERATIONS_TABLE } from "./openclaw-agent-goal-operations-schema.js";
 import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
-import {
-  LEGACY_PARTICIPANT_OPTIONAL_COLUMNS,
-  withLegacySessionParticipantsSchema,
-} from "./openclaw-agent-participants-migration.js";
+import { LEGACY_PARTICIPANT_OPTIONAL_COLUMNS } from "./openclaw-agent-participants-migration.js";
 import { SESSION_PENDING_INPUTS_TABLE } from "./openclaw-agent-pending-inputs-schema.js";
 import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
@@ -381,30 +375,6 @@ export function assertAgentSchemaVersion(
     schemaSql,
     options.version < 18 ? "legacy" : "current",
   );
-}
-
-/** Keep v17 additive convergence and legacy validation inside one migration transaction. */
-export function ensureOpenClawAgentV17MediaPreflightInTransaction(
-  db: DatabaseSync,
-  options: { agentId: string; pathname: string },
-): void {
-  const legacyMediaSchemaSql = withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL);
-  ensureSessionAdditiveColumns(db);
-  ensureSessionEntryValidityProjection(db);
-  ensureSessionKeyContractSchemaInTransaction(db);
-  verifyAndRepairCanonicalSqliteIndexes(db, options.pathname, legacyMediaSchemaSql, {
-    allowMissingColumns: true,
-    validateAfterRepair: () =>
-      assertAgentSchemaVersion(
-        db,
-        {
-          agentId: options.agentId,
-          pathname: options.pathname,
-          version: AGENT_MEDIA_SCHEMA_VERSION,
-        },
-        legacyMediaSchemaSql,
-      ),
-  });
 }
 
 function hasLegacyMemoryChunkProvenanceTrigger(db: DatabaseSync): boolean {
