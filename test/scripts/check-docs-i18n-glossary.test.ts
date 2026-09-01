@@ -57,6 +57,8 @@ describe("check-docs-i18n-glossary", () => {
           bin: "git",
           args: ["show", "HEAD:docs/a&b.md"],
           shell: false,
+          timeoutForceKillOnLeaderExit: true,
+          timeoutKillGraceMs: 0,
         }),
       );
     } finally {

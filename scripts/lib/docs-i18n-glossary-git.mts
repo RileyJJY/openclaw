@@ -106,6 +106,11 @@ export function createGitRunner(options: GitRunnerOptions = {}): GitRunner {
         // Git takes its refs and paths as direct argv; cmd.exe wrapping would
         // reject legal Windows documentation pathnames such as `docs/a&b.md`.
         shell: false,
+        // This check runs in automation with a one-minute per-lookup budget.
+        // Git has no useful recovery work after the deadline, so do not add
+        // the managed runner's default five-second termination grace.
+        timeoutKillGraceMs: 0,
+        timeoutForceKillOnLeaderExit: true,
         timeoutMs,
         onReady: (child) => {
           child.stdout?.setEncoding("utf8");
