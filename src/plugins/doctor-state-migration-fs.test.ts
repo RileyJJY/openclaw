@@ -57,6 +57,29 @@ describe("archiveLegacyStateSource", () => {
     await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe("{}");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "archives under a free suffix when an existing archive is a symlink",
+    async () => {
+      const filePath = path.join(dir, "state.json");
+      const archiveTarget = path.join(dir, "archive-target.json");
+      await fs.writeFile(filePath, "{}");
+      await fs.writeFile(archiveTarget, "{}");
+      await fs.symlink(archiveTarget, `${filePath}.migrated`);
+      const changes: string[] = [];
+      const warnings: string[] = [];
+
+      await archiveLegacyStateSource({ filePath, label: "test state", changes, warnings });
+
+      expect(warnings).toEqual([]);
+      expect(changes).toEqual([`Archived test state legacy source -> ${filePath}.migrated.2`]);
+      await expect(fs.readFile(`${filePath}.migrated.2`, "utf8")).resolves.toBe("{}");
+      await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe("{}");
+      await expect(fs.lstat(`${filePath}.migrated`)).resolves.toSatisfy((stat) =>
+        stat.isSymbolicLink(),
+      );
+    },
+  );
+
   it("archives under a free suffix without reading an oversized existing archive", async () => {
     const filePath = path.join(dir, "state.json");
     await fs.writeFile(filePath, `{"newer":true}`);
