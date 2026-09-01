@@ -142,21 +142,6 @@ describe("http body limits", () => {
     await expect(readRequestBodyWithLimit(req, { maxBytes: 1024 })).resolves.toBe('{"ok":true}');
   });
 
-  it("reads arbitrary body bytes without decoding", async () => {
-    const req = createMockRequest({ emitEnd: false });
-    const body = Buffer.from([0, 255, 128, 192, 10]);
-    const promise = readRequestBodyWithLimit(req, {
-      maxBytes: body.length,
-      encoding: "buffer",
-    });
-    queueMicrotask(() => {
-      req.emit("data", body.subarray(0, 2));
-      req.emit("data", body.subarray(2));
-      req.emit("end");
-    });
-    await expect(promise).resolves.toEqual(body);
-  });
-
   it.each([
     {
       name: "rejects oversized streamed body",

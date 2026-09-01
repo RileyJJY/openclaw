@@ -270,12 +270,16 @@ async function readGuardedBody(
   res: ServerResponse,
 ): Promise<Buffer<ArrayBuffer> | undefined> {
   try {
-    const body = await readRequestBodyWithLimit(req, {
+    // latin1 maps every byte to one code unit, so the existing string-returning
+    // SDK contract can round-trip arbitrary request bytes without a new public
+    // Plugin SDK overload that older hosts do not implement.
+    const bodyText = await readRequestBodyWithLimit(req, {
       maxBytes: PROXY_MAX_REQUEST_BODY_BYTES,
       timeoutMs: PROXY_REQUEST_BODY_TIMEOUT_MS,
-      encoding: "buffer",
+      encoding: "latin1",
       destroyOnLimit: false,
     });
+    const body = Buffer.from(bodyText, "latin1");
     return body.length > 0 ? body : undefined;
   } catch (error) {
     if (isRequestBodyLimitError(error)) {
