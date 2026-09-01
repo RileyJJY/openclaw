@@ -587,6 +587,7 @@ function ensureAgentSchema(
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
+        maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
         ensureOpenClawAgentV17MediaPreflightInTransaction(db, { agentId, pathname });
       }
       if (previousVersion === targetVersion) {

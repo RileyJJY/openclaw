@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { AGENT_MEDIA_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import * as agentDatabaseLease from "../state/openclaw-agent-db-lease.js";
+import * as sessionMigrations from "../state/openclaw-agent-db-session-migrations.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -39,6 +41,8 @@ function createV17AdditiveFixture(options: { schemaDrift?: "missing-cache-table"
 
 describe("legacy media persistence additive schema repair", () => {
   afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     cleanupTempDirs(tempDirs);
@@ -126,6 +130,104 @@ describe("legacy media persistence additive schema repair", () => {
           )
           .get(),
       ).toEqual({ name: "idx_agent_transcript_event_identity_sequence" });
+    } finally {
+      repaired.close();
+    }
+  });
+
+  it("renews maintenance before the v17 validity projection preflight", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const stateDir = makeTempDir(tempDirs, "media-persistence-v17-lease-renewal-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const databasePath = opened.path;
+    opened.db
+      .prepare(
+        `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(
+        "agent:main:v17-lease-renewal",
+        "v17-lease-renewal",
+        JSON.stringify({ sessionId: "v17-lease-renewal", updatedAt: 1 }),
+        1,
+      );
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec(`
+        DROP TABLE session_participants;
+        DROP TRIGGER session_conversations_route_context_invalidate_after_update;
+        DROP INDEX idx_agent_session_conversations_conversation;
+        ALTER TABLE session_conversations DROP COLUMN route_context_json;
+        DROP TRIGGER session_nodes_entry_valid_after_insert;
+        DROP TRIGGER session_nodes_entry_valid_after_entry_update;
+        DROP TRIGGER session_nodes_entry_valid_after_identity_update;
+        DROP INDEX idx_agent_session_nodes_entry_valid_pending;
+        DROP TABLE session_key_contract;
+        ALTER TABLE session_nodes DROP COLUMN entry_valid;
+        PRAGMA user_version = ${AGENT_MEDIA_SCHEMA_VERSION};
+        UPDATE schema_meta
+           SET schema_version = ${AGENT_MEDIA_SCHEMA_VERSION}
+         WHERE meta_key = 'primary';
+      `);
+    } finally {
+      database.close();
+    }
+
+    const events: string[] = [];
+    const originalAuthorityCheck = agentDatabaseLease.assertAgentDatabaseMaintenanceAuthority;
+    let firstAuthorityCheck = true;
+    vi.spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority").mockImplementation(
+      () => {
+        originalAuthorityCheck();
+        if (firstAuthorityCheck) {
+          firstAuthorityCheck = false;
+          // Leave less than one lease interval before the v17 preflight starts.
+          vi.setSystemTime(Date.now() + 59_000);
+        }
+      },
+    );
+    const originalRenew = agentDatabaseLease.renewAgentDatabaseMaintenanceAuthorityIfPresent;
+    vi.spyOn(
+      agentDatabaseLease,
+      "renewAgentDatabaseMaintenanceAuthorityIfPresent",
+    ).mockImplementation(() => {
+      events.push("renew");
+      originalRenew();
+    });
+    const originalProjection = sessionMigrations.ensureSessionEntryValidityProjection;
+    let projectionCalls = 0;
+    vi.spyOn(sessionMigrations, "ensureSessionEntryValidityProjection").mockImplementation((db) => {
+      projectionCalls += 1;
+      if (projectionCalls === 1) {
+        events.push("v17-preflight");
+        // The real projection is synchronous, so the heartbeat cannot run here.
+        vi.setSystemTime(Date.now() + 2_000);
+      }
+      originalProjection(db);
+    });
+
+    const result = await migrateLegacyMediaPersistence({ env });
+
+    expect(result.warnings).toEqual([]);
+    expect(events.slice(0, 2)).toEqual(["renew", "v17-preflight"]);
+    expect(projectionCalls).toBeGreaterThanOrEqual(1);
+    closeOpenClawAgentDatabasesForTest();
+    const repaired = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(repaired.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(
+        repaired
+          .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+          .get("agent:main:v17-lease-renewal"),
+      ).toEqual({ entry_valid: 1 });
     } finally {
       repaired.close();
     }
