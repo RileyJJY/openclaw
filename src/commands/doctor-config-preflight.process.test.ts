@@ -18,6 +18,7 @@ import {
   createSourceRuntime,
   runIsolatedModuleScript,
   runSourceRuntime,
+  seedV17AdditiveRepairDatabase,
 } from "./doctor-config-preflight.process.test-support.js";
 
 const STARTUP_REFUSAL =
@@ -93,31 +94,6 @@ function seedOwnerlessSchemaOnlyAgentDatabase(stateDir: string): string {
       register: false,
     });
     database.prepare("UPDATE schema_meta SET agent_id = NULL WHERE meta_key = 'primary'").run();
-  } finally {
-    database.close();
-  }
-  return databasePath;
-}
-
-function seedV17AdditiveRepairDatabase(stateDir: string): string {
-  const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const database = new DatabaseSync(databasePath);
-  try {
-    ensureOpenClawAgentDatabaseSchema(database, {
-      agentId: "main",
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      path: databasePath,
-      register: false,
-    });
-    database.exec(`
-      DROP TABLE session_participants;
-      DROP TRIGGER session_conversations_route_context_invalidate_after_update;
-      ALTER TABLE session_conversations DROP COLUMN route_context_json;
-      DROP INDEX idx_agent_transcript_event_identity_sequence;
-      PRAGMA user_version = 17;
-      UPDATE schema_meta SET schema_version = 17;
-    `);
   } finally {
     database.close();
   }
