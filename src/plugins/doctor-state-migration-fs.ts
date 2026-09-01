@@ -34,10 +34,15 @@ export async function archiveLegacyStateSource(params: {
       // instead of re-warning every startup (#102749): identical bytes already
       // preserve the snapshot; differing bytes archive under a free suffix.
       const [sourceStat, archiveStat] = await Promise.all([
-        fs.stat(params.filePath),
-        fs.stat(archivedPath),
+        fs.lstat(params.filePath),
+        fs.lstat(archivedPath),
       ]);
-      if (sourceStat.size === archiveStat.size && sourceStat.size <= ARCHIVE_COMPARE_MAX_BYTES) {
+      if (
+        sourceStat.isFile() &&
+        archiveStat.isFile() &&
+        sourceStat.size === archiveStat.size &&
+        sourceStat.size <= ARCHIVE_COMPARE_MAX_BYTES
+      ) {
         const [sourceResult, archiveResult] = await Promise.all([
           readRegularFile({ filePath: params.filePath, maxBytes: ARCHIVE_COMPARE_MAX_BYTES }),
           readRegularFile({ filePath: archivedPath, maxBytes: ARCHIVE_COMPARE_MAX_BYTES }),
