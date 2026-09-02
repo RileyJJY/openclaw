@@ -444,8 +444,8 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
     let buffer: Buffer;
     try {
       if (limit === undefined) {
-        // Preserve the historical fs.readFile contract for external callers that
-        // omit maxBytes, including following a symlinked legacy source.
+        // Preserve the historical fs.readFile contract for callers that omit
+        // maxBytes, including following a symlinked legacy source.
         buffer = await fs.readFile(filePath);
       } else {
         ({ buffer } = await readRegularFile({ filePath, maxBytes: limit }));

@@ -154,38 +154,17 @@ source remains untouched so the operator can fix it and retry.
 
 #### Bounded legacy JSON imports
 
-The single-file helper keeps the historical unbounded `fs.readFile` behavior
-when `maxBytes` is omitted, including following a symlinked legacy source. New
-migrations that read untrusted or potentially large legacy files should opt
-into a byte limit:
+Bundled official plugins use an internal bounded migration policy for legacy
+JSON sources. This is not a supported third-party Plugin SDK contract; external
+plugins must not import `openclaw/plugin-sdk/runtime-doctor-migrations` or rely
+on these limits.
 
-```ts
-defineLegacyJsonStateMigration({
-  // First, try the normal bounded migration path.
-  maxBytes: 8 * 1024 * 1024,
-  // Optionally retry once with a larger, still bounded budget.
-  recoveryMaxBytes: 64 * 1024 * 1024,
-  oversizedSource: ({ filePath, maxBytes }) => ({
-    preview: `- Legacy source exceeds ${maxBytes} bytes: ${filePath}`,
-    warning: `Skipped legacy migration for ${filePath}; source remains in place`,
-  }),
-  // ...the remaining migration declaration...
-});
-```
-
-`maxBytes` limits the first read in bytes. If that read is too large and
-`recoveryMaxBytes` is set, the helper makes one more bounded read with that
-limit. A source that fits the recovery limit continues through parsing,
-insert-if-absent plugin-state import, and archival. A source that exceeds the
-final limit is not parsed or archived: `oversizedSource` supplies the Doctor
-preview and warning, or the helper's default messages are used, and the
-legacy source remains available for manual recovery. The callback receives the
-path and the final limit that was exceeded.
-
-The bundled defaults are exported as
-`LEGACY_JSON_MIGRATION_MAX_BYTES` (8 MiB) and
-`LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES` (64 MiB). These are conventions for
-bounded migrations, not implicit limits for callers that omit `maxBytes`.
+For the bundled Active Memory and Device Pair migrations, the first read is
+limited to 8 MiB and one recovery read is limited to 64 MiB. Sources that fit
+the recovery limit continue through parsing, plugin-state import, and archival.
+Sources above 64 MiB are not parsed or archived; Doctor warns and leaves the
+legacy source in place for manual recovery. The internal helper retains its
+historical no-limit behavior for existing callers.
 
 Use `phase: "after-session-repair"` when a migration needs canonical session
 ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
