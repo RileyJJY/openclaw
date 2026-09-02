@@ -286,16 +286,12 @@ export async function checkTelemetryUpdate(
         lastFailedAttempt = { at: nowMs, endpoint, stateDirectory };
         return cached;
       }
-      const parsed = TelemetryResponseSchema.safeParse(
+      const parsed = TelemetryResponseSchema.parse(
         await readProviderJsonResponse(response, "Telemetry update response"),
       );
-      if (!parsed.success) {
-        lastFailedAttempt = { at: nowMs, endpoint, stateDirectory };
-        return cached;
-      }
-      const note = parsed.data.note?.trim().slice(0, TELEMETRY_NOTE_MAX_LENGTH);
+      const note = parsed.note?.trim().slice(0, TELEMETRY_NOTE_MAX_LENGTH);
       const update = {
-        version: parsed.data.version,
+        version: parsed.version,
         ...(note ? { note } : {}),
       };
       writeConfigMachineState(TELEMETRY_STATE_KEY, {

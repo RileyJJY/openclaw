@@ -24,51 +24,6 @@ const TELEMETRY_URL = "https://telemetry.openclaw.ai/api/latest-version";
 const TELEMETRY_STATE_KEY = "telemetry.updateCheck";
 const mockHttp = useMockHttp();
 
-function oversizedTelemetryResponse() {
-  const prefix = new TextEncoder().encode('{"version":"2026.8.24","padding":"');
-  const suffix = new TextEncoder().encode('"}');
-  const chunk = new Uint8Array(1024 * 1024).fill(120);
-  const totalPaddingBytes = 32 * 1024 * 1024;
-  let phase = 0;
-  let remaining = totalPaddingBytes;
-  let enqueuedBytes = 0;
-  let canceled = false;
-  const body = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (phase === 0) {
-        phase = 1;
-        enqueuedBytes += prefix.byteLength;
-        controller.enqueue(prefix);
-        return;
-      }
-      if (remaining > 0) {
-        const next = Math.min(remaining, chunk.byteLength);
-        remaining -= next;
-        enqueuedBytes += next;
-        controller.enqueue(chunk.subarray(0, next));
-        return;
-      }
-      controller.enqueue(suffix);
-      controller.close();
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(body, { headers: { "content-type": "application/json" } }),
-    state: {
-      get canceled() {
-        return canceled;
-      },
-      get enqueuedBytes() {
-        return enqueuedBytes;
-      },
-      totalPaddingBytes,
-    },
-  };
-}
-
 function installPluginRegistry(...plugins: Parameters<typeof createPluginRecord>[0][]): void {
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(...plugins.map((plugin) => createPluginRecord(plugin)));
@@ -512,24 +467,53 @@ describe("anonymous telemetry", () => {
     expect(persisted?.note).toHaveLength(500);
   });
 
-  it("bounds update responses while accepting a legitimate large body", async () => {
-    let response: Response = Response.json({
-      version: "2026.8.24",
-      padding: "x".repeat(1024 * 1024),
+  it("bounds streamed update responses without replacing the cached result or successful ping", async () => {
+    const chunk = new Uint8Array(1024 * 1024).fill(120);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode('{"version":"2026.8.25","padding":"'),
+      ...Array<Uint8Array>(32).fill(chunk),
+      encoder.encode('"}'),
+    ][Symbol.iterator]();
+    let canceled = false;
+    let enqueuedBytes = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const next = chunks.next();
+        if (next.done) {
+          controller.close();
+        } else {
+          enqueuedBytes += next.value.byteLength;
+          controller.enqueue(next.value);
+        }
+      },
+      cancel() {
+        canceled = true;
+      },
     });
-    const fetchImpl = vi.fn(async () => response);
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({ version: "2026.8.24", padding: "x".repeat(chunk.length) }),
+      )
+      .mockResolvedValueOnce(new Response(body));
+    const options = { surface: "gateway" as const, fetchImpl };
 
+    await expect(checkTelemetryUpdate({}, { ...options, nowMs: NOW })).resolves.toEqual({
+      version: "2026.8.24",
+    });
     await expect(
-      checkTelemetryUpdate({}, { surface: "gateway", fetchImpl, nowMs: NOW }),
+      checkTelemetryUpdate({}, { ...options, nowMs: NOW + DAY_MS + 1 }),
     ).resolves.toEqual({ version: "2026.8.24" });
-
-    const oversized = oversizedTelemetryResponse();
-    response = oversized.response;
+    expect(canceled).toBe(true);
+    expect(enqueuedBytes).toBeLessThan(32 * chunk.length);
+    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
+      lastPingAt: NOW,
+      latestVersion: "2026.8.24",
+    });
     await expect(
-      checkTelemetryUpdate({}, { surface: "gateway", fetchImpl, nowMs: NOW + DAY_MS + 1 }),
+      checkTelemetryUpdate({}, { ...options, nowMs: NOW + DAY_MS + 30_001 }),
     ).resolves.toEqual({ version: "2026.8.24" });
-    expect(oversized.state.canceled).toBe(true);
-    expect(oversized.state.enqueuedBytes).toBeLessThan(oversized.state.totalPaddingBytes);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
