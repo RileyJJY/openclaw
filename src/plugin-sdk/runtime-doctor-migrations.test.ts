@@ -7,6 +7,7 @@ import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import {
   defineLegacyJsonStateMigration,
   definePluginDoctorMigrationFromPlans,
@@ -210,13 +211,10 @@ function detectParams(stateDir: string, context: PluginDoctorStateMigrationConte
 
 describe("defineLegacyJsonStateMigration", () => {
   let stateDir = "";
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-doctor-migration-"));
-  });
-
-  afterEach(async () => {
-    await fs.rm(stateDir, { recursive: true, force: true });
+  beforeEach(() => {
+    stateDir = tempDirs.make("openclaw-runtime-doctor-migration-");
   });
 
   it("preserves unbounded reads when maxBytes is omitted", async () => {
