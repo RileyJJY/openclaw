@@ -169,11 +169,11 @@ The helper skips undefined source values and `__proto__`, `prototype`, and
 `constructor` keys at each level it merges. It does not recursively sanitize
 newly assigned subtrees.
 
-### Plugin state migration declarations
+### Bundled plugin state migration declarations
 
-Bundled plugins should list every migration under
-`doctorContract.stateMigrations` in `openclaw.plugin.json` and export the
-matching `stateMigrations` array from their doctor-contract artifact. Keep the
+Bundled official plugins declare `doctorContract.stateMigrations` in
+`openclaw.plugin.json` and export the matching `stateMigrations` array from
+their doctor-contract artifact. Keep the
 IDs, order, `doctorOnly` flags, and phases identical. Read-only Doctor planning
 uses candidate-bundled descriptors to record exact plugin owners without
 loading the plugin.
@@ -184,10 +184,11 @@ including manifests that contain descriptor arrays, until candidate validation
 binds those artifacts separately. The legacy value `true` continues to locate
 their dynamic contract for non-planning Doctor flows.
 
-Plan-based migrations can use
-`definePluginDoctorMigrationFromPlans(...)` from
-`openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
-and plugin-state import behavior.
+Their private-local build mappings can use
+`definePluginDoctorMigrationFromPlans(...)` and
+`defineLegacyJsonStateMigration(...)` from
+`openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy,
+preview, and plugin-state import behavior.
 
 Migrations may supply a read-only `collectBackupResources` callback, including
 through `definePluginDoctorMigrationFromPlans(...)`. Return absolute paths with
@@ -202,10 +203,10 @@ private state is not included in the recovery set. Malformed declarations and
 invalid inventories still fail. Collection does not capture or restore data,
 authorize a migration, or replace an updater's required capture checks.
 
-For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
-sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
-errors and invalid JSON reach Doctor's detection or migration warnings; the
-source remains untouched so the operator can fix it and retry.
+For bundled single-file imports, `defineLegacyJsonStateMigration(...)` skips
+missing sources (`ENOENT`) and values the plugin parser rejects with `null`.
+Other read errors and invalid JSON reach Doctor's detection or migration
+warnings; the source remains untouched so the operator can fix it and retry.
 
 Use `phase: "after-session-repair"` when a migration needs canonical session
 ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
@@ -417,10 +418,13 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
 
 ## Bounded legacy JSON imports
 
-Bundled official plugins use an internal bounded migration policy for legacy
-JSON sources. This is not a supported third-party Plugin SDK contract; external
-plugins must not import `openclaw/plugin-sdk/runtime-doctor-migrations` or rely
-on these limits.
+The bundled Active Memory and Device Pair migrations opt into explicit read
+bounds through `defineLegacyJsonStateMigration(...)`. Those limits are policy
+choices for these two imports; they are not default limits for the generic
+helper. Callers that omit `maxBytes` retain its historical unbounded-read
+behavior, and other exports from
+`openclaw/plugin-sdk/runtime-doctor-migrations` keep their separately documented
+contracts.
 
 For the bundled Active Memory and Device Pair migrations, the first read is
 limited to 8 MiB and one recovery read is limited to 64 MiB. Sources that fit
