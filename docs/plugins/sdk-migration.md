@@ -138,19 +138,23 @@ including empty results without range metadata. Only an explicit
 missing files; registered-input normalization remains available through the
 next Plugin SDK major.
 
-### Plugin state migration declarations
+### Bundled plugin state migration declarations
 
-Plugins should declare `doctorContract.stateMigrations: true` in
+Bundled official plugins declare `doctorContract.stateMigrations: true` in
 `openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
-artifact. Plan-based migrations can use
-`definePluginDoctorMigrationFromPlans(...)` from
-`openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
-and plugin-state import behavior.
+artifacts. Their private-local build mappings can use
+`definePluginDoctorMigrationFromPlans(...)` and
+`defineLegacyJsonStateMigration(...)` from
+`openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy,
+preview, and plugin-state import behavior.
 
-For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
-sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
-errors and invalid JSON reach Doctor's detection or migration warnings; the
-source remains untouched so the operator can fix it and retry.
+This private-local migration helper is not a supported third-party Plugin SDK
+contract. External plugins must use a documented public SDK subpath and must
+not import `openclaw/plugin-sdk/runtime-doctor-migrations`. For bundled
+single-file imports, missing sources (`ENOENT`) and values rejected by the
+plugin parser are treated as unavailable; other read errors and invalid JSON
+reach Doctor's detection or migration warnings, and the source remains
+untouched so the operator can fix it and retry.
 
 #### Bounded legacy JSON imports
 
