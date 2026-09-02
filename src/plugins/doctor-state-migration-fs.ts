@@ -1,6 +1,6 @@
 // Shared filesystem helpers for plugin doctor legacy-state migrations.
 import fs from "node:fs/promises";
-import { readRegularFile } from "../infra/fs-safe.js";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 
 /** Bound the existing-archive byte comparison so a huge prior snapshot cannot
  * force an unbounded allocation during a later migration. */
@@ -34,8 +34,8 @@ export async function archiveLegacyStateSource(params: {
       // instead of re-warning every startup (#102749): identical bytes already
       // preserve the snapshot; differing bytes archive under a free suffix.
       const [sourceStat, archiveStat] = await Promise.all([
-        fs.lstat(params.filePath),
-        fs.lstat(archivedPath),
+        fs.stat(params.filePath),
+        fs.stat(archivedPath),
       ]);
       if (
         sourceStat.isFile() &&
@@ -44,10 +44,10 @@ export async function archiveLegacyStateSource(params: {
         sourceStat.size <= ARCHIVE_COMPARE_MAX_BYTES
       ) {
         const [sourceResult, archiveResult] = await Promise.all([
-          readRegularFile({ filePath: params.filePath, maxBytes: ARCHIVE_COMPARE_MAX_BYTES }),
-          readRegularFile({ filePath: archivedPath, maxBytes: ARCHIVE_COMPARE_MAX_BYTES }),
+          readArchiveComparisonFile(params.filePath),
+          readArchiveComparisonFile(archivedPath),
         ]);
-        if (sourceResult.buffer.equals(archiveResult.buffer)) {
+        if (sourceResult !== null && archiveResult !== null && sourceResult.equals(archiveResult)) {
           await fs.rm(params.filePath, { force: true });
           params.changes.push(
             `Removed already-archived ${params.label} legacy source ${params.filePath}`,
@@ -64,6 +64,32 @@ export async function archiveLegacyStateSource(params: {
     params.changes.push(`Archived ${params.label} legacy source -> ${archivedPath}`);
   } catch (err) {
     params.warnings.push(`Failed archiving ${params.label} legacy source: ${String(err)}`);
+  }
+}
+
+/**
+ * Reads a legacy source or archive for collision comparison. Unlike the bounded
+ * migration read, this intentionally follows legacy symlinks to preserve the
+ * historical archive-convergence behavior while keeping the comparison bounded.
+ */
+async function readArchiveComparisonFile(filePath: string): Promise<Buffer | null> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(filePath, "r");
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > ARCHIVE_COMPARE_MAX_BYTES) {
+      return null;
+    }
+    try {
+      return await readFileHandleBounded(handle, ARCHIVE_COMPARE_MAX_BYTES);
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("file exceeds limit of")) {
+        return null;
+      }
+      throw err;
+    }
+  } finally {
+    await handle?.close();
   }
 }
 
