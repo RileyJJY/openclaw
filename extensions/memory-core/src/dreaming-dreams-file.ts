@@ -96,6 +96,7 @@ async function resolveSafeMarkdownPath(
   workspaceDir?: string,
 ): Promise<{ filePath: string; realPath?: string; stat: Stats } | null> {
   const pathDescription = DREAMS_FILENAMES.includes(
+    // SAFETY: basename is compared only against the literal DREAMS filename union.
     path.basename(filePath) as (typeof DREAMS_FILENAMES)[number],
   )
     ? "DREAMS.md"
@@ -336,6 +337,7 @@ async function replaceManagedMarkdownBlockStreaming(
           await writeChunk(chunk);
         }
       } catch (err) {
+        // SAFETY: replay only suppresses a missing optional withheld spool.
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
           throw err;
         }
