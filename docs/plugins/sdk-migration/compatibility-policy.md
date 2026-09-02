@@ -356,3 +356,26 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
 `openclaw/plugin-sdk/media-local-roots`. The
 `openclaw/plugin-sdk/agent-media-payload` facade and its
 `buildAgentMediaPayload(...)` projection are deprecated.
+
+## Bounded legacy JSON imports
+
+Bundled official plugins use an internal bounded migration policy for legacy
+JSON sources. This is not a supported third-party Plugin SDK contract; external
+plugins must not import `openclaw/plugin-sdk/runtime-doctor-migrations` or rely
+on these limits.
+
+For the bundled Active Memory and Device Pair migrations, the first read is
+limited to 8 MiB and one recovery read is limited to 64 MiB. Sources that fit
+the recovery limit continue through parsing, plugin-state import, and archival.
+Sources above 64 MiB are not parsed or archived; Doctor warns and leaves the
+legacy source in place for manual recovery. The internal helper retains its
+historical no-limit behavior for existing callers.
+
+Use `phase: "after-session-repair"` when a migration needs canonical session
+ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
+them after session repair under SQLite maintenance ownership. The context
+provides bounded `readPluginStateEntriesInKeyRange` and
+`readSessionIdentityEvidenceBatch` reads, plus
+`deletePluginStateEntriesIfUnchanged` only during a fenced repair. Preserve
+unknown or ambiguous ownership. Delete only the observed raw rows; callbacks
+retained after maintenance ends cannot authorize later writes.
