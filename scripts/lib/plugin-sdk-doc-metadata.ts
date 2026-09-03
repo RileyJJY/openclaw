@@ -108,9 +108,6 @@ export const pluginSdkDocMetadata = {
   "agent-workspace-runtime": {
     category: "runtime",
   },
-  "runtime-doctor-migrations": {
-    category: "runtime",
-  },
   "speech-settings": {
     category: "provider",
   },
