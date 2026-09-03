@@ -252,6 +252,32 @@ describe("defineLegacyJsonStateMigration", () => {
     await expect(fs.access(sourcePath)).rejects.toThrow();
   });
 
+  it("follows symlinked legacy sources under an explicit maxBytes limit", async () => {
+    const sourcePath = path.join(stateDir, "legacy.json");
+    const targetPath = path.join(stateDir, "legacy-target.json");
+    const source = JSON.stringify({ value: "capped-symlinked" });
+    await fs.writeFile(targetPath, source, "utf8");
+    await fs.symlink(targetPath, sourcePath);
+
+    const migration = createJsonMigration({ maxBytes: 128 });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const context: PluginDoctorStateMigrationContext = {
+      openPluginStateKeyedStore: (options) =>
+        createPluginStateKeyedStore("migration-capped-symlink-fixture", { ...options, env }),
+    };
+    const params = detectParams(stateDir, context);
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({ preview: ["loaded"] });
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [expect.stringContaining("Archived runtime doctor JSON test legacy source")],
+      warnings: [],
+    });
+    const archivePath = `${sourcePath}.migrated`;
+    await expect(fs.readFile(archivePath, "utf8")).resolves.toBe(source);
+    expect((await fs.lstat(archivePath)).isSymbolicLink()).toBe(true);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+  });
+
   it("honors an explicit maxBytes limit", async () => {
     const sourcePath = path.join(stateDir, "legacy.json");
     await fs.writeFile(sourcePath, JSON.stringify({ value: "x".repeat(256) }), "utf8");

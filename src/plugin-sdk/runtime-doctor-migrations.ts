@@ -448,7 +448,10 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
         // maxBytes, including following a symlinked legacy source.
         buffer = await fs.readFile(filePath);
       } else {
-        ({ buffer } = await readRegularFile({ filePath, maxBytes: limit }));
+        // Resolve intentional legacy links before the bounded regular-file read;
+        // keep filePath unchanged so archiveLegacyStateSource moves the link.
+        const resolvedFilePath = await fs.realpath(filePath);
+        ({ buffer } = await readRegularFile({ filePath: resolvedFilePath, maxBytes: limit }));
       }
     } catch (err) {
       if (limit !== undefined && err instanceof FsSafeError && err.code === "too-large") {

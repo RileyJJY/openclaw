@@ -170,6 +170,48 @@ describe("active-memory doctor state migration", () => {
     ]);
   });
 
+  it("imports symlinked legacy session opt-outs under the file cap", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    const targetPath = path.join(
+      stateDir,
+      "plugins",
+      "active-memory",
+      "session-toggles-target.json",
+    );
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const source = JSON.stringify({
+      sessions: {
+        "telegram:dm:symlinked": { disabled: true, updatedAt: 1700 },
+      },
+    });
+    await fs.writeFile(targetPath, source, "utf8");
+    await fs.symlink(targetPath, sourcePath);
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 1 Active Memory session toggle entry"),
+      expect.stringContaining("Archived Active Memory session toggles legacy source"),
+    ]);
+    const archivePath = `${sourcePath}.migrated`;
+    await expect(fs.readFile(archivePath, "utf8")).resolves.toBe(source);
+    expect((await fs.lstat(archivePath)).isSymbolicLink()).toBe(true);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+    await expect(
+      createDoctorContext(env)
+        .openPluginStateKeyedStore({ namespace: "session-toggles", maxEntries: 10_000 })
+        .entries(),
+    ).resolves.toHaveLength(1);
+  });
+
   it("normalizes malformed legacy updatedAt values before importing toggles", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-10T00:00:00.000Z"));
