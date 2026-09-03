@@ -1,10 +1,8 @@
 // Shared filesystem helpers for plugin doctor legacy-state migrations.
 import fs from "node:fs/promises";
-import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 
-/** Bound the existing-archive byte comparison so a huge prior snapshot cannot
- * force an unbounded allocation during a later migration. */
-const ARCHIVE_COMPARE_MAX_BYTES = 64 * 1024 * 1024;
+/** Keep archive comparisons bounded without imposing a file-size cutoff. */
+const ARCHIVE_COMPARE_CHUNK_BYTES = 64 * 1024;
 
 /** True when the legacy-state path exists and is a regular file. */
 export async function legacyStateFileExists(filePath: string): Promise<boolean> {
@@ -41,19 +39,13 @@ export async function archiveLegacyStateSource(params: {
         sourceStat.isFile() &&
         archiveStat.isFile() &&
         sourceStat.size === archiveStat.size &&
-        sourceStat.size <= ARCHIVE_COMPARE_MAX_BYTES
+        (await areArchiveFilesEqual(params.filePath, archivedPath, sourceStat.size))
       ) {
-        const [sourceResult, archiveResult] = await Promise.all([
-          readArchiveComparisonFile(params.filePath),
-          readArchiveComparisonFile(archivedPath),
-        ]);
-        if (sourceResult !== null && archiveResult !== null && sourceResult.equals(archiveResult)) {
-          await fs.rm(params.filePath, { force: true });
-          params.changes.push(
-            `Removed already-archived ${params.label} legacy source ${params.filePath}`,
-          );
-          return;
-        }
+        await fs.rm(params.filePath, { force: true });
+        params.changes.push(
+          `Removed already-archived ${params.label} legacy source ${params.filePath}`,
+        );
+        return;
       }
       const nextArchivePath = await firstFreeArchivePath(params.filePath);
       await fs.rename(params.filePath, nextArchivePath);
@@ -68,29 +60,80 @@ export async function archiveLegacyStateSource(params: {
 }
 
 /**
- * Reads a legacy source or archive for collision comparison. Unlike the bounded
- * migration read, this intentionally follows legacy symlinks to preserve the
- * historical archive-convergence behavior while keeping the comparison bounded.
+ * Compares a legacy source and archive through fixed-size buffers. Opening the
+ * paths directly preserves the historical symlink-following behavior, while
+ * the comparison never allocates the complete files.
  */
-async function readArchiveComparisonFile(filePath: string): Promise<Buffer | null> {
-  let handle: fs.FileHandle | undefined;
+async function areArchiveFilesEqual(
+  sourcePath: string,
+  archivePath: string,
+  expectedSize: number,
+): Promise<boolean> {
+  let sourceHandle: fs.FileHandle | undefined;
+  let archiveHandle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(filePath, "r");
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > ARCHIVE_COMPARE_MAX_BYTES) {
-      return null;
+    sourceHandle = await fs.open(sourcePath, "r");
+    archiveHandle = await fs.open(archivePath, "r");
+    const [sourceStat, archiveStat] = await Promise.all([
+      sourceHandle.stat(),
+      archiveHandle.stat(),
+    ]);
+    if (
+      !sourceStat.isFile() ||
+      !archiveStat.isFile() ||
+      sourceStat.size !== expectedSize ||
+      archiveStat.size !== expectedSize
+    ) {
+      return false;
     }
-    try {
-      return await readFileHandleBounded(handle, ARCHIVE_COMPARE_MAX_BYTES);
-    } catch (err) {
-      if (err instanceof Error && err.message.startsWith("file exceeds limit of")) {
-        return null;
+
+    const sourceBuffer = Buffer.allocUnsafe(Math.min(ARCHIVE_COMPARE_CHUNK_BYTES, expectedSize));
+    const archiveBuffer = Buffer.allocUnsafe(Math.min(ARCHIVE_COMPARE_CHUNK_BYTES, expectedSize));
+    for (let position = 0; position < expectedSize;) {
+      const chunkBytes = Math.min(ARCHIVE_COMPARE_CHUNK_BYTES, expectedSize - position);
+      const [sourceComplete, archiveComplete] = await Promise.all([
+        readArchiveComparisonChunk(sourceHandle, sourceBuffer, position, chunkBytes),
+        readArchiveComparisonChunk(archiveHandle, archiveBuffer, position, chunkBytes),
+      ]);
+      if (!sourceComplete || !archiveComplete) {
+        return false;
       }
-      throw err;
+      if (!sourceBuffer.subarray(0, chunkBytes).equals(archiveBuffer.subarray(0, chunkBytes))) {
+        return false;
+      }
+      position += chunkBytes;
     }
+
+    const [sourceFinalStat, archiveFinalStat] = await Promise.all([
+      sourceHandle.stat(),
+      archiveHandle.stat(),
+    ]);
+    return (
+      sourceFinalStat.isFile() &&
+      archiveFinalStat.isFile() &&
+      sourceFinalStat.size === expectedSize &&
+      archiveFinalStat.size === expectedSize
+    );
   } finally {
-    await handle?.close();
+    await Promise.all([sourceHandle?.close(), archiveHandle?.close()]);
   }
+}
+
+async function readArchiveComparisonChunk(
+  handle: fs.FileHandle,
+  buffer: Buffer,
+  position: number,
+  length: number,
+): Promise<boolean> {
+  let filled = 0;
+  while (filled < length) {
+    const { bytesRead } = await handle.read(buffer, filled, length - filled, position + filled);
+    if (bytesRead === 0) {
+      return false;
+    }
+    filled += bytesRead;
+  }
+  return true;
 }
 
 async function firstFreeArchivePath(sourcePath: string): Promise<string> {

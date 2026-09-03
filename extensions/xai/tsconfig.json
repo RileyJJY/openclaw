@@ -11,9 +11,6 @@
       "openclaw/plugin-sdk/sandbox": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/sandbox.d.ts"
       ],
-      "openclaw/plugin-sdk/runtime-doctor-migrations": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor-migrations.d.ts"
-      ],
       "openclaw/plugin-sdk/runtime-doctor": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor.d.ts"
       ],

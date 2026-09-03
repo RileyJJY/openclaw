@@ -94,6 +94,24 @@ describe("archiveLegacyStateSource", () => {
     await expect(fs.readFile(`${filePath}.migrated.2`, "utf8")).resolves.toBe(`{"newer":true}`);
   });
 
+  it("removes the source when an identical archive exceeds the comparison chunk", async () => {
+    const filePath = path.join(dir, "state.json");
+    const archivePath = `${filePath}.migrated`;
+    const size = 64 * 1024 * 1024 + 1;
+    await fs.writeFile(filePath, "");
+    await fs.writeFile(archivePath, "");
+    await Promise.all([fs.truncate(filePath, size), fs.truncate(archivePath, size)]);
+    const changes: string[] = [];
+    const warnings: string[] = [];
+
+    await archiveLegacyStateSource({ filePath, label: "test state", changes, warnings });
+
+    expect(warnings).toEqual([]);
+    expect(changes).toEqual([`Removed already-archived test state legacy source ${filePath}`]);
+    await expect(fs.access(filePath)).rejects.toThrow();
+    await expect(fs.stat(archivePath)).resolves.toMatchObject({ size });
+  });
+
   it("keeps a failed archive as a warning", async () => {
     const filePath = path.join(dir, "missing.json");
     const changes: string[] = [];
