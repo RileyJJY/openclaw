@@ -11,7 +11,7 @@ import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { readRegularFile } from "../infra/fs-safe.js";
+import { FsSafeError, readRegularFile } from "../infra/fs-safe.js";
 import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
@@ -451,11 +451,7 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
         ({ buffer } = await readRegularFile({ filePath, maxBytes: limit }));
       }
     } catch (err) {
-      if (
-        limit !== undefined &&
-        err instanceof Error &&
-        err.message.startsWith(`File exceeds ${limit} bytes`)
-      ) {
+      if (limit !== undefined && err instanceof FsSafeError && err.code === "too-large") {
         return { kind: "oversized", maxBytes: limit };
       }
       if (hasErrnoCode(err, "ENOENT")) {

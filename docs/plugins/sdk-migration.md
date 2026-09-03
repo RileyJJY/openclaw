@@ -138,37 +138,37 @@ including empty results without range metadata. Only an explicit
 missing files; registered-input normalization remains available through the
 next Plugin SDK major.
 
-### Bundled plugin state migration declarations
+### Plugin state migration declarations
 
-Bundled official plugins declare `doctorContract.stateMigrations: true` in
-`openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
-artifacts. Their private-local build mappings can use
-`definePluginDoctorMigrationFromPlans(...)` and
-`defineLegacyJsonStateMigration(...)` from
-`openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy,
-preview, and plugin-state import behavior.
+Plugins declare `doctorContract.stateMigrations: true` in `openclaw.plugin.json`
+and export `stateMigrations` from their doctor-contract artifact. Plan-based
+migrations can use `definePluginDoctorMigrationFromPlans(...)`, and single-file
+imports can use `defineLegacyJsonStateMigration(...)` from the supported public
+`openclaw/plugin-sdk/runtime-doctor-migrations` subpath to preserve existing
+move, copy, preview, and plugin-state import behavior.
 
-This private-local migration helper is not a supported third-party Plugin SDK
-contract. External plugins must use a documented public SDK subpath and must
-not import `openclaw/plugin-sdk/runtime-doctor-migrations`. For bundled
-single-file imports, missing sources (`ENOENT`) and values rejected by the
+For single-file imports, missing sources (`ENOENT`) and values rejected by the
 plugin parser are treated as unavailable; other read errors and invalid JSON
 reach Doctor's detection or migration warnings, and the source remains
 untouched so the operator can fix it and retry.
 
 #### Bounded legacy JSON imports
 
-Bundled official plugins use an internal bounded migration policy for legacy
-JSON sources. This is not a supported third-party Plugin SDK contract; external
-plugins must not import `openclaw/plugin-sdk/runtime-doctor-migrations` or rely
-on these limits.
+The single-file helper keeps the historical unbounded `fs.readFile` behavior
+when `maxBytes` is omitted, including following a symlinked legacy source. A
+caller can opt into a bounded first read with `maxBytes`, followed by one
+bounded recovery read with `recoveryMaxBytes` when the first limit is exceeded.
+Sources that fit the final limit continue through parsing, plugin-state import,
+and archival. Sources above the final limit are not parsed or archived;
+`oversizedSource` supplies the Doctor preview and warning, or the helper's
+default messages are used, and the legacy source remains available for manual
+recovery. The bounded path uses the `@openclaw/fs-safe` regular-file contract;
+symlinked or non-regular sources are reported as read failures rather than
+being silently treated as missing.
 
-For the bundled Active Memory and Device Pair migrations, the first read is
-limited to 8 MiB and one recovery read is limited to 64 MiB. Sources that fit
-the recovery limit continue through parsing, plugin-state import, and archival.
-Sources above 64 MiB are not parsed or archived; Doctor warns and leaves the
-legacy source in place for manual recovery. The internal helper retains its
-historical no-limit behavior for existing callers.
+The bundled Active Memory and Device Pair migrations use an 8 MiB first-pass
+limit and a 64 MiB recovery limit. These exported constants are conventions for
+bounded migrations, not implicit limits for callers that omit `maxBytes`.
 
 Use `phase: "after-session-repair"` when a migration needs canonical session
 ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
