@@ -140,35 +140,17 @@ next Plugin SDK major.
 
 ### Plugin state migration declarations
 
-Plugins declare `doctorContract.stateMigrations: true` in `openclaw.plugin.json`
-and export `stateMigrations` from their doctor-contract artifact. Plan-based
-migrations can use `definePluginDoctorMigrationFromPlans(...)`, and single-file
-imports can use `defineLegacyJsonStateMigration(...)` from the supported public
-`openclaw/plugin-sdk/runtime-doctor-migrations` subpath to preserve existing
-move, copy, preview, and plugin-state import behavior.
+Plugins should declare `doctorContract.stateMigrations: true` in
+`openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
+artifact. Plan-based migrations can use
+`definePluginDoctorMigrationFromPlans(...)` from
+`openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy,
+preview, and plugin-state import behavior.
 
-For single-file imports, missing sources (`ENOENT`) and values rejected by the
-plugin parser are treated as unavailable; other read errors and invalid JSON
-reach Doctor's detection or migration warnings, and the source remains
-untouched so the operator can fix it and retry.
-
-#### Bounded legacy JSON imports
-
-The single-file helper keeps the historical unbounded `fs.readFile` behavior
-when `maxBytes` is omitted, including following a symlinked legacy source. A
-caller can opt into a bounded first read with `maxBytes`, followed by one
-bounded recovery read with `recoveryMaxBytes` when the first limit is exceeded.
-Sources that fit the final limit continue through parsing, plugin-state import,
-and archival. Sources above the final limit are not parsed or archived;
-`oversizedSource` supplies the Doctor preview and warning, or the helper's
-default messages are used, and the legacy source remains available for manual
-recovery. The bounded path uses the `@openclaw/fs-safe` regular-file contract;
-symlinked or non-regular sources are reported as read failures rather than
-being silently treated as missing.
-
-The bundled Active Memory and Device Pair migrations use an 8 MiB first-pass
-limit and a 64 MiB recovery limit. These exported constants are conventions for
-bounded migrations, not implicit limits for callers that omit `maxBytes`.
+For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
+sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
+errors and invalid JSON reach Doctor's detection or migration warnings; the
+source remains untouched so the operator can fix it and retry.
 
 Use `phase: "after-session-repair"` when a migration needs canonical session
 ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
