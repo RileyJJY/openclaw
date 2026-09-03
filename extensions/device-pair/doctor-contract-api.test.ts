@@ -206,6 +206,29 @@ describe("device-pair doctor notify migration", () => {
     ).resolves.toEqual(subscriber);
   });
 
+  it("imports symlinked legacy notify subscribers under the file cap", async () => {
+    const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
+    const targetPath = path.join(stateDir, "device-pair-notify-state-target.json");
+    const subscriber = expectDefined(legacySubscribers(1)[0], "symlinked subscriber");
+    const source = JSON.stringify({ subscribers: [subscriber], notifiedRequestIds: {} });
+    await fs.writeFile(targetPath, source, "utf8");
+    await fs.symlink(targetPath, sourcePath);
+
+    const migration = expectDefined(stateMigrations[0], "device-pair state migration");
+    const result = await migration.migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Device Pair notify subscribers -> plugin state (1 imported, 0 already present)",
+      expect.stringContaining("Archived Device Pair notify-state legacy source"),
+    ]);
+    const archivePath = `${sourcePath}.migrated`;
+    await expect(fs.readFile(archivePath, "utf8")).resolves.toBe(source);
+    expect((await fs.lstat(archivePath)).isSymbolicLink()).toBe(true);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+    await expect(openSubscribers().entries()).resolves.toHaveLength(1);
+  });
+
   it("ignores legacy notify files that only contain cache state", async () => {
     const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
     await fs.writeFile(
