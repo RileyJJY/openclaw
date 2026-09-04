@@ -360,18 +360,22 @@ describe("memory runtime handles", () => {
 
   it("supports frozen registered managers without violating proxy invariants", async () => {
     let closed = false;
+    let probed = false;
     const manager = Object.freeze({
-      search: vi.fn(async () => []),
-      readFile: vi.fn(async ({ relPath }: { relPath: string }) => ({
+      search: async () => [],
+      readFile: async ({ relPath }: { relPath: string }) => ({
         text: "frozen",
         path: relPath,
-      })),
-      status: vi.fn(() => ({ backend: "builtin" as const, provider: "frozen" })),
-      probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
-      probeVectorAvailability: vi.fn(async () => true),
-      close: vi.fn(async () => {
-        closed = true;
       }),
+      status: () => ({ backend: "builtin" as const, provider: probed ? "ready" : "frozen" }),
+      probeEmbeddingAvailability: async () => {
+        probed = true;
+        return { ok: true };
+      },
+      probeVectorAvailability: async () => true,
+      close: async () => {
+        closed = true;
+      },
     }) satisfies RegisteredMemorySearchManager;
     const runtime = {
       ...createRuntime(),
@@ -383,6 +387,9 @@ describe("memory runtime handles", () => {
 
     await expect(acquired.manager?.search("frozen manager")).resolves.toEqual([]);
     expect(acquired.manager?.status()).toEqual({ backend: "builtin", provider: "frozen" });
+    await expect(acquired.manager?.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    expect(acquired.manager?.status()).toEqual({ backend: "builtin", provider: "ready" });
+    await expect(acquired.manager?.probeVectorAvailability()).resolves.toBe(true);
     await expect(acquired.manager?.readFile({ relPath: "memory/frozen.md" })).resolves.toEqual({
       status: "ok",
       text: "frozen",
