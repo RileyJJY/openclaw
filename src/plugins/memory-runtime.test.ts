@@ -358,6 +358,40 @@ describe("memory runtime handles", () => {
     expect(manager.readCalls()).toBe(5);
   });
 
+  it("supports frozen registered managers without violating proxy invariants", async () => {
+    let closed = false;
+    const manager = Object.freeze({
+      search: vi.fn(async () => []),
+      readFile: vi.fn(async ({ relPath }: { relPath: string }) => ({
+        text: "frozen",
+        path: relPath,
+      })),
+      status: vi.fn(() => ({ backend: "builtin" as const, provider: "frozen" })),
+      probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+      probeVectorAvailability: vi.fn(async () => true),
+      close: vi.fn(async () => {
+        closed = true;
+      }),
+    }) satisfies RegisteredMemorySearchManager;
+    const runtime = {
+      ...createRuntime(),
+      getMemorySearchManager: vi.fn(async () => ({ manager })),
+    } satisfies MemoryPluginRuntime;
+    mocks.getMemoryRuntime.mockReturnValue(runtime);
+
+    const acquired = await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+
+    await expect(acquired.manager?.search("frozen manager")).resolves.toEqual([]);
+    expect(acquired.manager?.status()).toEqual({ backend: "builtin", provider: "frozen" });
+    await expect(acquired.manager?.readFile({ relPath: "memory/frozen.md" })).resolves.toEqual({
+      status: "ok",
+      text: "frozen",
+      path: "memory/frozen.md",
+    });
+    await acquired.manager?.close?.();
+    expect(closed).toBe(true);
+  });
+
   it("authorizes raw hits inside the selected plugin runtime scope", async () => {
     const { registry, runtime } = createRegistry();
     runtime.authorizeSearchHits.mockImplementationOnce(async ({ hits }) => {

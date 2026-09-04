@@ -57,19 +57,20 @@ function normalizeRegisteredMemoryManager(
   }
   const readFile: MemorySearchManager["readFile"] = async (params) =>
     normalizeRegisteredMemoryReadResult(await manager.readFile(params));
-  const adapter = new Proxy(manager, {
-    get(target, property) {
+  const adapter = new Proxy(Object.create(null) as MemorySearchManager, {
+    get(_target, property) {
       if (property === "readFile") {
         return readFile;
       }
-      const value = Reflect.get(target, property, target) as unknown;
+      const value = Reflect.get(manager, property, manager) as unknown;
       if (typeof value !== "function") {
         return value;
       }
       // Registered managers may use class/private state, so calls retain the target receiver.
-      return value.bind(target);
+      return value.bind(manager);
     },
-    // SAFETY: readFile is replaced with the canonical adapter; every other member is unchanged.
+    // SAFETY: the neutral target avoids Proxy invariants for frozen managers; readFile is
+    // replaced with the canonical adapter and every other member is read from the manager.
   }) as MemorySearchManager;
   registeredMemoryManagerAdapters.set(manager, adapter);
   return adapter;
