@@ -98,6 +98,7 @@ type TelegramPollingSessionOpts = {
   getCommittedUpdateId: () => number | null;
   persistUpdateId: (updateId: number) => void | Promise<void>;
   log: (line: string) => void;
+  logVerbose?: (line: string) => void;
   /** Pre-resolved Telegram transport to reuse across bot instances */
   telegramTransport?: TelegramTransport;
   /** Rebuild Telegram transport after stall/network recovery when marked dirty. */
@@ -497,7 +498,7 @@ export class TelegramPollingSession {
         }
       };
       if (message.type === "poll-start") {
-        this.opts.log(
+        this.opts.logVerbose?.(
           `[telegram][diag] isolated polling worker poll-start offset=${message.offset ?? "null"}`,
         );
         liveness.noteGetUpdatesStarted({ offset: message.offset }, message.startedAt);

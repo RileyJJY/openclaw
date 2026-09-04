@@ -502,6 +502,7 @@ async function runTransportRestart(error: Error, recoverable = true) {
 function createPollingSession(params: {
   abortSignal: AbortSignal;
   log?: (message: string) => void;
+  logVerbose?: (message: string) => void;
   telegramTransport?: ReturnType<typeof makeTelegramTransport>;
   createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
   getAcceptedUpdateId?: () => number | null;
@@ -524,6 +525,7 @@ function createPollingSession(params: {
     getCommittedUpdateId: params.getCommittedUpdateId ?? (() => null),
     persistUpdateId: params.persistUpdateId ?? (async () => undefined),
     log: params.log ?? (() => undefined),
+    logVerbose: params.logVerbose ?? (() => undefined),
     telegramTransport: params.telegramTransport,
     stallThresholdMs: params.stallThresholdMs,
     setStatus: params.setStatus,
@@ -840,6 +842,7 @@ function startIsolatedIngressSession(params: {
   getCommittedUpdateId?: () => number | null;
   init?: AsyncVoidFn;
   log?: (message: string) => void;
+  logVerbose?: (message: string) => void;
   persistUpdateId?: ConstructorParameters<typeof TelegramPollingSession>[0]["persistUpdateId"];
   stop?: () => Promise<void>;
   spooledUpdateHandlerTimeoutMs?: number;
@@ -858,6 +861,7 @@ function startIsolatedIngressSession(params: {
     abortSignal: params.abort.signal,
     getCommittedUpdateId: params.getCommittedUpdateId,
     log: params.log,
+    logVerbose: params.logVerbose,
     persistUpdateId: params.persistUpdateId,
     stallThresholdMs: params.stallThresholdMs,
     isolatedIngress: {
@@ -2406,6 +2410,31 @@ describe("TelegramPollingSession", () => {
       expectLogExcludes(log, "Polling stall detected");
     } finally {
       watchdogHarness.restore();
+      abort.abort();
+      await runPromise;
+    }
+  });
+
+  it("routes isolated poll-start diagnostics to verbose logging", async () => {
+    const abort = new AbortController();
+    const log = vi.fn();
+    const logVerbose = vi.fn();
+    const worker = createListeningIngressWorker();
+    const { runPromise } = startIsolatedIngressSession({
+      abort,
+      handleUpdate: async () => undefined,
+      log,
+      logVerbose,
+      createWorker: worker.createWorker,
+    });
+
+    try {
+      await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
+      worker.emit({ type: "poll-start", offset: 42, startedAt: 150_000 });
+
+      expectLogExcludes(log, "isolated polling worker poll-start");
+      expectLogIncludes(logVerbose, "isolated polling worker poll-start offset=42");
+    } finally {
       abort.abort();
       await runPromise;
     }

@@ -8,6 +8,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/model-session-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
+  logVerbose,
   registerUncaughtExceptionHandler,
   registerUnhandledRejectionHandler,
   waitForAbortSignal,
@@ -293,6 +294,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         getCommittedUpdateId: offsetPersistence.getCommittedUpdateId,
         persistUpdateId: offsetPersistence.persistUpdateId,
         log,
+        logVerbose,
         telegramTransport,
         createTelegramTransport: createTelegramTransportForPolling,
         setStatus: opts.setStatus,
