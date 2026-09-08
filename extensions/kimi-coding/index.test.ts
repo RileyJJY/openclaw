@@ -48,6 +48,28 @@ describe("kimi provider plugin", () => {
     });
   });
 
+  it("classifies Kimi quota 403s as rate limits without masking auth failures", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "kimi",
+        status: 403,
+        errorType: "access_terminated_error",
+        errorMessage: "You've reached your weekly (7-day) usage limit.",
+      } as never),
+    ).toBe("rate_limit");
+
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "kimi",
+        status: 403,
+        errorType: "invalid_api_key",
+        errorMessage: "Invalid API key",
+      } as never),
+    ).toBeUndefined();
+  });
+
   it.each(["k3", "k3-256k"])("exposes %s adaptive thinking levels", async (modelId) => {
     const provider = await registerSingleProviderPlugin(plugin);
 

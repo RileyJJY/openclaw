@@ -13,6 +13,28 @@ import { wrapKimiProviderStream } from "./stream.js";
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
 
+function classifyKimiFailoverReason({
+  provider,
+  errorMessage,
+  status,
+  errorType,
+}: {
+  provider?: string;
+  errorMessage: string;
+  status?: number;
+  errorType?: string;
+}) {
+  if (provider?.trim().toLowerCase() !== PROVIDER_ID || status !== 403) {
+    return undefined;
+  }
+  const normalized = `${errorType ?? ""}\n${errorMessage}`.toLowerCase();
+  return normalized.includes("access_terminated_error") ||
+    /\b(?:weekly|7-day)\s+(?:usage\s+)?limit\b/.test(normalized) ||
+    /\bquota\s+will\s+reset\b/.test(normalized)
+    ? "rate_limit"
+    : undefined;
+}
+
 function findExplicitProviderConfig(
   providers: Record<string, unknown> | undefined,
   providerId: string,
@@ -81,6 +103,7 @@ export default defineSingleProviderPluginEntry({
         };
       },
     },
+    classifyFailoverReason: classifyKimiFailoverReason,
     buildReplayPolicy: () => KIMI_REPLAY_POLICY,
     normalizeResolvedModel: ({ model }) => {
       const normalizedId = normalizeKimiCodingModelId(model.id);
