@@ -222,7 +222,7 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+main().catch((/** @type {unknown} */ error) => {
   console.error(error);
   process.exitCode = 1;
 });
