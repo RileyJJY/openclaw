@@ -9,6 +9,7 @@ import {
   asObjectRecord,
   defineLegacyJsonStateMigration,
   LEGACY_JSON_MIGRATION_MAX_BYTES,
+  LEGACY_JSON_MIGRATION_RECOVERY_DOC_URL,
   LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
@@ -111,8 +112,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     maxBytes: LEGACY_TOGGLE_STATE_MAX_BYTES,
     recoveryMaxBytes: LEGACY_TOGGLE_RECOVERY_MAX_BYTES,
     oversizedSource: ({ filePath, maxBytes }) => ({
-      warning: `Skipped Active Memory session toggle migration because ${filePath} exceeds ${maxBytes} bytes; left legacy source in place`,
-      preview: `- Active Memory session toggles: legacy source exceeds ${maxBytes} bytes and cannot be recovered; left in place`,
+      warning:
+        `Skipped Active Memory session toggle migration because ${filePath} exceeds ${maxBytes} bytes; ` +
+        `left legacy source in place. Data-preserving recovery: ${LEGACY_JSON_MIGRATION_RECOVERY_DOC_URL}`,
+      preview:
+        `- Active Memory session toggles: legacy source exceeds ${maxBytes} bytes and cannot be recovered; ` +
+        `left in place. Recovery: ${LEGACY_JSON_MIGRATION_RECOVERY_DOC_URL}`,
     }),
     capacityPrecheck: {
       warning: ({ available, missing }) =>

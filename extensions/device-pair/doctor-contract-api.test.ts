@@ -296,18 +296,25 @@ describe("device-pair doctor notify migration", () => {
     await fs.truncate(sourcePath, LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES + 1);
 
     const migration = expectDefined(stateMigrations[0], "device-pair state migration");
-    await expect(migration.detectLegacyState(migrationParams())).resolves.toMatchObject({
-      preview: [
-        expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES} bytes`),
-      ],
-    });
+    const preview = await migration.detectLegacyState(migrationParams());
+    expect(preview?.preview[0]).toEqual(
+      expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES} bytes`),
+    );
+    expect(preview?.preview[0]).toEqual(
+      expect.stringContaining("compatibility-policy#oversized-legacy-json-recovery"),
+    );
 
-    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+    const result = await migration.migrateLegacyState(migrationParams());
+    expect(result).toEqual({
       changes: [],
-      warnings: [
-        expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES} bytes`),
-      ],
+      warnings: [expect.any(String)],
     });
+    expect(result.warnings[0]).toEqual(
+      expect.stringContaining(`exceeds ${LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES} bytes`),
+    );
+    expect(result.warnings[0]).toEqual(
+      expect.stringContaining("compatibility-policy#oversized-legacy-json-recovery"),
+    );
     await expect(fs.access(sourcePath)).resolves.toBeUndefined();
     await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
     await expect(

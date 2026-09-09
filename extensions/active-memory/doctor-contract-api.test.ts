@@ -424,17 +424,17 @@ describe("active-memory doctor state migration", () => {
     await fs.writeFile(sourcePath, Buffer.alloc(LEGACY_TOGGLE_RECOVERY_MAX_BYTES + 1));
 
     const migration = expectDefined(stateMigrations[0], "active-memory state migration");
-    await expect(
-      migration.detectLegacyState({
-        config: {},
-        env,
-        stateDir,
-        oauthDir: path.join(stateDir, "oauth"),
-        context: createDoctorContext(env),
-      }),
-    ).resolves.toMatchObject({
-      preview: [expect.stringContaining("cannot be recovered")],
+    const preview = await migration.detectLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
     });
+    expect(preview?.preview[0]).toEqual(expect.stringContaining("cannot be recovered"));
+    expect(preview?.preview[0]).toEqual(
+      expect.stringContaining("compatibility-policy#oversized-legacy-json-recovery"),
+    );
 
     const result = await migration.migrateLegacyState({
       config: {},
@@ -445,9 +445,13 @@ describe("active-memory doctor state migration", () => {
     });
 
     expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toEqual(
       expect.stringContaining(`exceeds ${LEGACY_TOGGLE_RECOVERY_MAX_BYTES} bytes`),
-    ]);
+    );
+    expect(result.warnings[0]).toEqual(
+      expect.stringContaining("compatibility-policy#oversized-legacy-json-recovery"),
+    );
     await expect(fs.access(sourcePath)).resolves.toBeUndefined();
     await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
   });

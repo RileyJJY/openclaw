@@ -375,6 +375,91 @@ Sources above 64 MiB are not parsed or archived; Doctor warns and leaves the
 legacy source in place for manual recovery. The internal helper retains its
 historical no-limit behavior for existing callers.
 
+### Oversized legacy JSON recovery
+
+When Doctor reports that an Active Memory or Device Pair legacy source exceeds
+64 MiB, stop the Gateway (`openclaw gateway stop`) before editing the file and
+keep an untouched backup.
+The recovery below compacts only records that the production migration supports;
+it does not discard a supported disabled session toggle or subscriber. It also
+resolves a symlink before replacement, so the legacy path remains a symlink when
+one was already in use. Run the command for the affected plugin only.
+The examples require `jq` 1.7 or later.
+
+```sh
+state_dir="${OPENCLAW_STATE_DIR:?Set OPENCLAW_STATE_DIR to the OpenClaw state directory}"
+source="$state_dir/plugins/active-memory/session-toggles.json"
+backup="$source.oversized-backup"
+target="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$source")"
+test ! -e "$backup" || { echo "Refusing to overwrite existing backup: $backup" >&2; exit 1; }
+cp -pL "$source" "$backup"
+tmp="$(mktemp "$target.recovery.XXXXXX")"
+jq -e '
+  {sessions: (
+    (.sessions // {})
+    | if type == "object" then
+        [to_entries[]
+         | select((.key | type) == "string" and (.key | length) > 0)
+         | select((.value | type) == "object" and .value.disabled == true)
+         | {key: .key, value: {
+             sessionKey: .key,
+             disabled: true,
+             updatedAt: (if (.value.updatedAt | type) == "number" and (.value.updatedAt | isfinite)
+                         then .value.updatedAt else (now * 1000 | floor) end)
+           }}]
+        | from_entries
+      else {} end
+  )}
+' "$source" > "$tmp"
+test "$(wc -c < "$tmp")" -le $((64 * 1024 * 1024))
+mv -f "$tmp" "$target"
+openclaw doctor --fix
+```
+
+For Device Pair, use the same backup, target, size-check, replacement, and
+Doctor steps, but replace the `jq` block with this one. It preserves every
+valid subscriber field used by Device Pair, normalizes the same optional fields
+as the production parser, and intentionally omits the obsolete request-id
+cache, which is not imported by the migration.
+
+Set `source="$state_dir/device-pair-notify.json"` before running the block.
+
+```sh
+jq -e '
+  {subscribers: (
+    (.subscribers // [])
+    | if type == "array" then
+        [.[]
+         | select(type == "object")
+         | (if (.to | type) == "string" then (.to | gsub("^\\s+|\\s+$"; "")) else "" end) as $to
+         | select(($to | type) == "string" and ($to | length) > 0)
+         | {to: $to,
+            accountId: (if (.accountId | type) == "string"
+                        then (.accountId | gsub("^\\s+|\\s+$"; "") | if . == "" then null else . end)
+                        else null end),
+            messageThreadId: (if (.messageThreadId | type) == "string"
+                              then (.messageThreadId | gsub("^\\s+|\\s+$"; "") | if . == "" then null else . end)
+                              elif (.messageThreadId | type) == "number" and (.messageThreadId | isfinite)
+                              then (.messageThreadId | if . >= 0 then floor else ceil end)
+                              else null end),
+            mode: (if .mode == "once" then "once" else "persistent" end),
+            addedAtMs: (if (.addedAtMs | type) == "number" and (.addedAtMs | isfinite)
+                        then (.addedAtMs | if . >= 0 then floor else ceil end)
+                        else (now * 1000 | floor) end)}
+         | with_entries(select(.value != null))]
+      else [] end
+  )}
+' "$source" > "$tmp"
+```
+
+Verify that the temporary file is at or below 64 MiB before `mv`, then rerun
+`openclaw doctor --fix`. Doctor imports the compact source and archives the
+original at `<source>.migrated`; retain the separate `.oversized-backup` until
+the imported entries have been checked. If the compact file is still too large,
+do not replace the source: preserve the backup and seek a plugin-specific
+recovery review. Never delete the original or overwrite it before the size
+check.
+
 Use `phase: "after-session-repair"` when a migration needs canonical session
 ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies
 them after session repair under SQLite maintenance ownership. The context

@@ -71,6 +71,9 @@ export type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-rou
 export const LEGACY_JSON_MIGRATION_MAX_BYTES = 8 * 1024 * 1024;
 /** Optional recovery bound for migrations that explicitly support larger sources. */
 export const LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES = 64 * 1024 * 1024;
+/** Operator runbook for sources that exceed the bounded recovery read. */
+export const LEGACY_JSON_MIGRATION_RECOVERY_DOC_URL =
+  "https://docs.openclaw.ai/plugins/sdk-migration/compatibility-policy#oversized-legacy-json-recovery";
 
 type KeyMoveValue = { value: unknown };
 type KeyMoveChangeContext = {

@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   defineLegacyJsonStateMigration,
   LEGACY_JSON_MIGRATION_MAX_BYTES,
+  LEGACY_JSON_MIGRATION_RECOVERY_DOC_URL,
   LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
@@ -36,6 +37,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     // budget before leaving an unprocessable source in place.
     recoveryMaxBytes: LEGACY_JSON_MIGRATION_RECOVERY_MAX_BYTES,
     archiveLabel: "Device Pair notify-state",
+    oversizedSource: ({ filePath, maxBytes }) => ({
+      warning:
+        `Skipped Device Pair notify subscriber migration because ${filePath} exceeds ${maxBytes} bytes; ` +
+        `left legacy source in place. Data-preserving recovery: ${LEGACY_JSON_MIGRATION_RECOVERY_DOC_URL}`,
+      preview:
+        `- Device Pair notify subscribers: legacy source exceeds ${maxBytes} bytes and cannot be recovered; ` +
+        `left in place. Recovery: ${LEGACY_JSON_MIGRATION_RECOVERY_DOC_URL}`,
+    }),
     describeEntries: (state, { filePath }) => ({
       preview: [
         `- Device Pair notify subscribers: ${filePath} -> plugin state (${DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE}, ${state.subscribers.length} subscriber(s))`,
