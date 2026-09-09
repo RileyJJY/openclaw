@@ -12,28 +12,7 @@ import { wrapKimiProviderStream } from "./stream.js";
 
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
-
-function classifyKimiFailoverReason({
-  provider,
-  errorMessage,
-  status,
-  errorType,
-}: {
-  provider?: string;
-  errorMessage: string;
-  status?: number;
-  errorType?: string;
-}) {
-  if (provider?.trim().toLowerCase() !== PROVIDER_ID || status !== 403) {
-    return undefined;
-  }
-  const normalized = `${errorType ?? ""}\n${errorMessage}`.toLowerCase();
-  return normalized.includes("access_terminated_error") ||
-    /\b(?:weekly|7-day)\s+(?:usage\s+)?limit\b/.test(normalized) ||
-    /\bquota\s+will\s+reset\b/.test(normalized)
-    ? "rate_limit"
-    : undefined;
-}
+const PROVIDER_ALIASES = ["kimi-code", "kimi-coding"];
 
 function findExplicitProviderConfig(
   providers: Record<string, unknown> | undefined,
@@ -56,7 +35,7 @@ export default defineSingleProviderPluginEntry({
   provider: {
     id: PROVIDER_ID,
     label: "Kimi",
-    aliases: ["kimi-code", "kimi-coding"],
+    aliases: PROVIDER_ALIASES,
     docsPath: "/providers/moonshot",
     envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
     manifestAuth: {
@@ -103,7 +82,20 @@ export default defineSingleProviderPluginEntry({
         };
       },
     },
-    classifyFailoverReason: classifyKimiFailoverReason,
+    classifyFailoverReason: ({ provider, status, errorMessage }) => {
+      if (!provider || status !== 403) {
+        return undefined;
+      }
+      const providerId = normalizeProviderId(provider);
+      if (providerId !== PROVIDER_ID && !PROVIDER_ALIASES.includes(providerId)) {
+        return undefined;
+      }
+      return /\b(?:weekly(?:\s+\(7-day\))?|(?:7|seven)[ -]day)\s+(?:usage\s+)?limit\b/i.test(
+        errorMessage,
+      ) || /\bquota\s+will\s+reset\b/i.test(errorMessage)
+        ? "rate_limit"
+        : undefined;
+    },
     buildReplayPolicy: () => KIMI_REPLAY_POLICY,
     normalizeResolvedModel: ({ model }) => {
       const normalizedId = normalizeKimiCodingModelId(model.id);

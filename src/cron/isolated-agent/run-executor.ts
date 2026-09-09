@@ -740,7 +740,7 @@ function createCronPromptExecutor(
               }
               return candidateResult;
             },
-            { abortSignal: params.abortSignal, trigger: "cron" },
+            { preparedRunAdmission, abortSignal: params.abortSignal, trigger: "cron" },
           );
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
