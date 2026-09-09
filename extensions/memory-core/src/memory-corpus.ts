@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -17,6 +18,19 @@ import {
 
 type MemoryCorpus = "memory" | "wiki";
 const memoryCorpusDeadlineChecks = new WeakMap<AbortSignal, () => void>();
+const activeMemoryCorpusDeadlineControl = new AsyncLocalStorage<MemorySearchDeadlineControl>();
+
+export function runWithMemoryCorpusDeadlineControl<T>(
+  controlDeadline: MemorySearchDeadlineControl,
+  run: () => T,
+): T {
+  return activeMemoryCorpusDeadlineControl.run(controlDeadline, run);
+}
+
+export function getMemoryCorpusDeadlineControl(): MemorySearchDeadlineControl | undefined {
+  return activeMemoryCorpusDeadlineControl.getStore();
+}
+
 type MemorySupplement = ReturnType<typeof listMemoryCorpusSupplements>[number];
 type MemorySupplementGetResult = NonNullable<
   Awaited<ReturnType<MemorySupplement["supplement"]["get"]>>

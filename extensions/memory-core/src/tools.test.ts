@@ -227,9 +227,31 @@ describe("memory_search unavailable payloads", () => {
 
     await tool.execute("local-service-hook", { query: "hello" });
 
-    expect(getMemorySearchManagerMockParams()).toEqual([
-      expect.objectContaining({ acquireLocalService }),
-    ]);
+    const managerParams = getMemorySearchManagerMockParams();
+    expect(managerParams).toHaveLength(1);
+    const managedAcquire = managerParams[0]?.acquireLocalService as
+      | ((target: { providerId: string; baseUrl: string }) => Promise<unknown>)
+      | undefined;
+    expect(managedAcquire).toEqual(expect.any(Function));
+    await managedAcquire?.({ providerId: "test", baseUrl: "http://localhost" });
+    expect(acquireLocalService).toHaveBeenCalledWith({
+      providerId: "test",
+      baseUrl: "http://localhost",
+    });
+
+    const secondTool = createMemorySearchTool({
+      config: asOpenClawConfig({
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      acquireLocalService,
+    });
+    if (!secondTool) {
+      throw new Error("second tool missing");
+    }
+    await secondTool.execute("local-service-hook-again", { query: "hello again" });
+    const repeatedParams = getMemorySearchManagerMockParams();
+    expect(repeatedParams).toHaveLength(2);
+    expect(repeatedParams[1]?.acquireLocalService).toBe(repeatedParams[0]?.acquireLocalService);
   });
 
   it("returns explicit unavailable metadata for quota failures", async () => {

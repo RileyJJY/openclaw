@@ -1,5 +1,6 @@
 // Memory Core tests cover tools.citations plugin behavior.
 import fs from "node:fs/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
@@ -660,6 +661,44 @@ describe("memory tools", () => {
         ["memory", "MEMORY.md"],
       ]);
       expect(searchCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds ordinary memory readiness while keeping the wiki deadline independent", async () => {
+    vi.useFakeTimers();
+    try {
+      const startup = createDeferred<void>();
+      setMemorySearchManagerImpl(async () => {
+        await startup.promise;
+        return { error: "memory startup delayed" };
+      });
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search: async () => await new Promise<never>(() => {}),
+        get: async () => null,
+      });
+
+      const tool = createMemorySearchToolOrThrow();
+      let settled = false;
+      const pending = tool
+        .execute("call_independent_wiki_deadline", { query: "alpha", corpus: "all" })
+        .then((result) => {
+          settled = true;
+          return result;
+        });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(settled).toBe(true);
+
+      startup.resolve();
+      const result = await pending;
+      expect(result.details).toMatchObject({
+        corpora: [
+          { corpus: "memory", outcome: "unavailable" },
+          { corpus: "wiki", outcome: "unavailable", error: "memory_search timed out after 15s" },
+        ],
+      });
     } finally {
       vi.useRealTimers();
     }
