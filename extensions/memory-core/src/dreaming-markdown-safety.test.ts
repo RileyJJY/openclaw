@@ -8,7 +8,8 @@ import {
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
+import { updateDreamsFile } from "./dreaming-dreams-file.js";
+import { writeDailyDreamingPhaseBlock, writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const MEMORY_DREAMING_MARKDOWN_MAX_BYTES = 16 * 1024 * 1024;
@@ -27,6 +28,15 @@ async function createOversizedStreamSource(filePath: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, "source", "utf-8");
   await fs.truncate(filePath, MEMORY_DREAMING_MARKDOWN_MAX_BYTES + 1);
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  const error = await fs.access(targetPath).then(
+    () => undefined,
+    (accessError: unknown) => accessError,
+  );
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 async function withControlledInputChunks<T>(
@@ -471,5 +481,158 @@ describe("dreaming markdown filesystem safety", () => {
         await realRm(tempDir, { force: true, recursive: true });
       }
     }
+  });
+
+  it("refuses to overwrite a symlinked DREAMS.md for deep summaries", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const targetPath = path.join(workspaceDir, "outside.txt");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(targetPath, "outside\n", "utf-8");
+    await fs.symlink(targetPath, dreamsPath);
+
+    await expect(
+      writeDeepDreamingReport({
+        workspaceDir,
+        bodyLines: ["- Do not escape workspace."],
+        storage: {
+          mode: "inline",
+          separateReports: false,
+        },
+        nowMs,
+        timezone,
+      }),
+    ).rejects.toThrow("Refusing to write symlinked DREAMS.md");
+    await expect(fs.readFile(targetPath, "utf-8")).resolves.toBe("outside\n");
+  });
+
+  it("serializes deep summary updates with an overlapping diary writer", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(
+      dreamsPath,
+      [
+        "# Dream Diary",
+        "",
+        "## Deep Sleep",
+        "<!-- openclaw:dreaming:deep:start -->",
+        "- Old durable summary",
+        "<!-- openclaw:dreaming:deep:end -->",
+        "",
+        "Diary entry stays.",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    let enteredUpdater!: () => void;
+    let releaseUpdater!: () => void;
+    const enteredUpdaterPromise = new Promise<void>((resolve) => {
+      enteredUpdater = resolve;
+    });
+    const releaseUpdaterPromise = new Promise<void>((resolve) => {
+      releaseUpdater = resolve;
+    });
+    const diaryWrite = updateDreamsFile({
+      workspaceDir,
+      updater: async (existing, lockedDreamsPath) => {
+        enteredUpdater();
+        await releaseUpdaterPromise;
+        return {
+          content: `${existing}\n\n*2026-04-05*\n\nNarrative entry written under the diary lock.`,
+          result: { written: 1, lockedDreamsPath },
+        };
+      },
+    });
+    await enteredUpdaterPromise;
+
+    const deepWrite = writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- Durable summary updated."],
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+      nowMs,
+      timezone,
+    });
+    let deepFinished = false;
+    void deepWrite.then(() => {
+      deepFinished = true;
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(deepFinished).toBe(false);
+
+    releaseUpdater();
+    const diaryResult = await diaryWrite;
+    await deepWrite;
+    expect(diaryResult.written).toBe(1);
+
+    const content = await fs.readFile(dreamsPath, "utf-8");
+    expect(content).toContain("- Durable summary updated.");
+    expect(content).not.toContain("- Old durable summary");
+    expect(content).toContain("Narrative entry written under the diary lock.");
+    expect(content).toContain("Diary entry stays.");
+  });
+
+  it("does not create memory/ when light dreaming has no content (separate mode)", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-empty-light-");
+
+    const result = await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- No notable updates."],
+      hasContent: false,
+      nowMs,
+      timezone,
+      storage: { mode: "separate", separateReports: false },
+    });
+
+    expect(result.inlinePath).toBeUndefined();
+    expect(result.reportPath).toBeUndefined();
+    await expectPathMissing(path.join(workspaceDir, "memory"));
+  });
+
+  it("does not create memory/ when REM dreaming has no content (inline mode)", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-empty-rem-");
+
+    const result = await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "rem",
+      bodyLines: [
+        "### Reflections",
+        "",
+        "### Possible Lasting Truths",
+        "- No strong candidate truths surfaced.",
+      ],
+      hasContent: false,
+      nowMs,
+      timezone,
+      storage: { mode: "inline", separateReports: false },
+    });
+
+    expect(result.inlinePath).toBeUndefined();
+    expect(result.reportPath).toBeUndefined();
+    await expectPathMissing(path.join(workspaceDir, "memory"));
+  });
+
+  it.each(["EACCES", "EIO"])("preserves %s from an empty daily report", async (code) => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-read-error-");
+    const failure = Object.assign(new Error("daily file unavailable"), { code });
+    vi.spyOn(fs, "access").mockRejectedValue(failure);
+    vi.spyOn(fs, "readFile").mockRejectedValue(failure);
+
+    await expect(
+      writeDailyDreamingPhaseBlock({
+        workspaceDir,
+        phase: "light",
+        bodyLines: ["- No notable updates."],
+        hasContent: false,
+        nowMs,
+        timezone,
+        storage: { mode: "both", separateReports: false },
+      }),
+    ).rejects.toBe(failure);
   });
 });
