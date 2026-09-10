@@ -684,4 +684,72 @@ describe("Reef doctor journal capacity", () => {
       expect(fs.existsSync(`${replayPath}.migrated`)).toBe(false);
     });
   });
+
+  it("allows an oversized replay completion when a later consume discards it", async () => {
+    await withTempDir("openclaw-reef-doctor-replay-transition-", async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      vi.spyOn(os, "homedir").mockReturnValue(stateDir);
+      const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+      const replayPath = path.join(legacyDir, "replay.jsonl");
+      const replayId = "01JZ0000000000000000000000";
+      const receipt = signReceipt(
+        {
+          id: replayId,
+          bodyHash: "a".repeat(64),
+          auditHead: "b".repeat(64),
+          status: "accepted",
+        },
+        generateIdentity().signing.secretKey,
+      );
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.writeFileSync(
+        replayPath,
+        [
+          JSON.stringify({
+            op: "claim",
+            peer: "alice",
+            id: replayId,
+            envelopeHash: "c".repeat(64),
+          }),
+          JSON.stringify({
+            op: "complete",
+            peer: "alice",
+            id: replayId,
+            receipt,
+            body: { enc: "d".repeat(MAX_PLUGIN_STATE_VALUE_BYTES) },
+          }),
+          JSON.stringify({ op: "consume", peer: "alice", id: replayId }),
+          "",
+        ].join("\n"),
+      );
+      const context = createDoctorContext(env);
+      const result = await migrationById("reef-runtime-files-to-plugin-state").migrateLegacyState({
+        config: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context,
+      });
+
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toEqual([
+        "Migrated 1 Reef replay bindings -> plugin state",
+        expect.stringContaining("Archived Reef replay state legacy source"),
+        expect.stringContaining("Verified all Reef durable state; cleared migration barrier"),
+      ]);
+      expect(fs.existsSync(`${replayPath}.migrated`)).toBe(true);
+      const replayStore = context.openPluginStateKeyedStore<ReefReplayRecord>({
+        namespace: REEF_REPLAY_NAMESPACE,
+        maxEntries: REEF_REPLAY_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+        defaultTtlMs: REEF_REPLAY_TTL_MS,
+      });
+      await expect(replayStore.lookup(reefReplayStoreKey("alice", replayId))).resolves.toEqual({
+        peer: "alice",
+        id: replayId,
+        envelopeHash: "c".repeat(64),
+        state: "consumed",
+      });
+    });
+  });
 });

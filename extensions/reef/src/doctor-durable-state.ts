@@ -152,6 +152,7 @@ async function readLegacyReefReplay(filePath: string): Promise<ReefReplayRecord[
   const { MAX_PLUGIN_STATE_VALUE_BYTES } =
     await import("openclaw/plugin-sdk/plugin-state-store-runtime");
   const records = new Map<string, ReefReplayRecord>();
+  const oversizedIntermediateKeys = new Set<string>();
   await forEachLegacyReefJsonlRecord(filePath, "ignore-torn", (value) => {
     const log = parseLegacyReefReplayLine(value);
     const key = reefReplayStoreKey(log.peer, log.id);
@@ -164,6 +165,7 @@ async function readLegacyReefReplay(filePath: string): Promise<ReefReplayRecord[
       if (!existing && records.size >= REEF_REPLAY_MAX_ENTRIES) {
         throw new Error(`${records.size + 1} replay bindings exceed plugin-state capacity`);
       }
+      oversizedIntermediateKeys.delete(key);
       next = {
         peer: log.peer,
         id: log.id,
@@ -175,12 +177,30 @@ async function readLegacyReefReplay(filePath: string): Promise<ReefReplayRecord[
         throw new Error(`Reef replay ${log.op} lacks claim`);
       }
       if (log.op === "complete") {
-        next = {
+        const completed = {
           ...existing,
-          state: "completed",
+          state: "completed" as const,
           receipt: log.receipt,
           ...(log.body ? { body: log.body } : {}),
         };
+        if (Buffer.byteLength(JSON.stringify(completed)) > MAX_PLUGIN_STATE_VALUE_BYTES) {
+          // A later consume or release can discard this oversized intermediate
+          // value, so retain only bounded metadata until the final state is known.
+          const boundedIntermediate = {
+            ...existing,
+            state: "completed" as const,
+            ...(Buffer.byteLength(
+              JSON.stringify({ ...existing, state: "completed", receipt: log.receipt }),
+            ) <= MAX_PLUGIN_STATE_VALUE_BYTES
+              ? { receipt: log.receipt }
+              : {}),
+          };
+          next = boundedIntermediate;
+          oversizedIntermediateKeys.add(key);
+        } else {
+          next = completed;
+          oversizedIntermediateKeys.delete(key);
+        }
       } else if (log.op === "consume") {
         next = {
           peer: existing.peer,
@@ -188,19 +208,27 @@ async function readLegacyReefReplay(filePath: string): Promise<ReefReplayRecord[
           envelopeHash: existing.envelopeHash,
           state: "consumed",
         };
+        oversizedIntermediateKeys.delete(key);
       } else {
         next = { ...existing, state: "available" };
+        oversizedIntermediateKeys.delete(key);
       }
-    }
-    const nextBytes = Buffer.byteLength(JSON.stringify(next));
-    if (nextBytes > MAX_PLUGIN_STATE_VALUE_BYTES) {
-      throw new Error(
-        `Reef legacy JSONL replay record exceeds ${MAX_PLUGIN_STATE_VALUE_BYTES} byte plugin-state value limit`,
-      );
     }
     records.delete(key);
     records.set(key, next);
   });
+  for (const [key, record] of records) {
+    if (oversizedIntermediateKeys.has(key)) {
+      throw new Error(
+        `Reef legacy JSONL replay record exceeds ${MAX_PLUGIN_STATE_VALUE_BYTES} byte plugin-state value limit`,
+      );
+    }
+    if (Buffer.byteLength(JSON.stringify(record)) > MAX_PLUGIN_STATE_VALUE_BYTES) {
+      throw new Error(
+        `Reef legacy JSONL replay record exceeds ${MAX_PLUGIN_STATE_VALUE_BYTES} byte plugin-state value limit`,
+      );
+    }
+  }
   return [...records.values()];
 }
 
