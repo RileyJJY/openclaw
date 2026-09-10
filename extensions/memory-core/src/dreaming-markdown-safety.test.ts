@@ -312,6 +312,39 @@ describe("dreaming markdown filesystem safety", () => {
     }
   });
 
+  it.each([
+    ["private", 0o700],
+    ["group-shared", 0o770],
+  ])("preserves the %s resolved daily target parent mode", async (_label, targetMode) => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-target-mode-");
+    const memoryDir = path.join(workspaceDir, "memory");
+    const targetDir = path.join(memoryDir, "private");
+    const inlinePath = path.join(memoryDir, "2026-04-05.md");
+    const targetPath = path.join(targetDir, "2026-04-05.md");
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.chmod(memoryDir, 0o755);
+    await fs.chmod(targetDir, targetMode);
+    await fs.writeFile(targetPath, "# Existing daily memory\n", "utf-8");
+    await fs.symlink(targetPath, inlinePath);
+
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- Candidate: preserve target directory permissions"],
+      nowMs,
+      timezone,
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+    });
+
+    expect((await fs.stat(targetDir)).mode & 0o7777).toBe(targetMode);
+  });
+
   it("rejects a parent-directory swap before an oversized final commit", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-race-");
     const memoryDir = path.join(workspaceDir, "memory");

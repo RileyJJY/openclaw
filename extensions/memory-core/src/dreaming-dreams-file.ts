@@ -549,7 +549,6 @@ export async function updateManagedDreamingMarkdownFile(
   params: ManagedMarkdownUpdateParams,
 ): Promise<void> {
   await fs.mkdir(path.dirname(params.filePath), { recursive: true });
-  const dirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
   // Daily memory files historically followed user-managed symlinks. Resolve
   // those links before atomic replacement so the link itself stays intact.
   const resolved = await resolveSafeMarkdownPath(
@@ -562,6 +561,9 @@ export async function updateManagedDreamingMarkdownFile(
     filePath: resolved?.filePath ?? params.filePath,
     expectedRealPath: resolved?.realPath,
   };
+  // The atomic writer applies dirMode to the destination's parent. Read it
+  // after resolution so nested symlink targets retain their own permissions.
+  const dirMode = (await fs.stat(path.dirname(resolvedParams.filePath))).mode & 0o7777;
   const stat = resolved?.stat ?? null;
   if (!stat || stat.size <= MEMORY_DREAMING_MARKDOWN_MAX_BYTES) {
     let original = "";
