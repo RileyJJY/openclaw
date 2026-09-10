@@ -387,14 +387,28 @@ one was already in use. Run the command for the affected plugin only.
 The examples require `jq` 1.7 or later.
 
 ```sh
+set -eu
 state_dir="${OPENCLAW_STATE_DIR:?Set OPENCLAW_STATE_DIR to the OpenClaw state directory}"
 source="$state_dir/plugins/active-memory/session-toggles.json"
 backup="$source.oversized-backup"
-target="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$source")"
-test ! -e "$backup" || { echo "Refusing to overwrite existing backup: $backup" >&2; exit 1; }
-cp -pL "$source" "$backup"
-tmp="$(mktemp "$target.recovery.XXXXXX")"
-jq -e '
+if ! target="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$source")"; then
+  echo "Cannot resolve legacy source: $source" >&2
+  exit 1
+fi
+if test -e "$backup"; then
+  echo "Refusing to overwrite existing backup: $backup" >&2
+  exit 1
+fi
+if ! cp -pL "$source" "$backup"; then
+  echo "Backup failed; source was not replaced: $source" >&2
+  exit 1
+fi
+if ! tmp="$(mktemp "$target.recovery.XXXXXX")"; then
+  echo "Cannot create recovery temporary file; source was not replaced: $source" >&2
+  exit 1
+fi
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+if ! jq -e '
   {sessions: (
     (.sessions // {})
     | if type == "object" then
@@ -410,9 +424,23 @@ jq -e '
         | from_entries
       else {} end
   )}
-' "$source" > "$tmp"
-test "$(wc -c < "$tmp")" -le $((64 * 1024 * 1024))
-mv -f "$tmp" "$target"
+' "$source" > "$tmp"; then
+  echo "Compaction failed; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if ! size="$(wc -c < "$tmp")"; then
+  echo "Cannot measure recovery output; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if test "$size" -gt $((64 * 1024 * 1024)); then
+  echo "Recovery output is ${size} bytes; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if ! mv -f "$tmp" "$target"; then
+  echo "Replacement failed; source and backup were preserved: $source" >&2
+  exit 1
+fi
+trap - EXIT HUP INT TERM
 openclaw doctor --fix
 ```
 
@@ -422,10 +450,31 @@ valid subscriber field used by Device Pair, normalizes the same optional fields
 as the production parser, and intentionally omits the obsolete request-id
 cache, which is not imported by the migration.
 
-Set `source="$state_dir/device-pair-notify.json"` before running the block.
+Run this complete guarded block with `source="$state_dir/device-pair-notify.json"`.
 
 ```sh
-jq -e '
+set -eu
+state_dir="${OPENCLAW_STATE_DIR:?Set OPENCLAW_STATE_DIR to the OpenClaw state directory}"
+source="$state_dir/device-pair-notify.json"
+backup="$source.oversized-backup"
+if ! target="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$source")"; then
+  echo "Cannot resolve legacy source: $source" >&2
+  exit 1
+fi
+if test -e "$backup"; then
+  echo "Refusing to overwrite existing backup: $backup" >&2
+  exit 1
+fi
+if ! cp -pL "$source" "$backup"; then
+  echo "Backup failed; source was not replaced: $source" >&2
+  exit 1
+fi
+if ! tmp="$(mktemp "$target.recovery.XXXXXX")"; then
+  echo "Cannot create recovery temporary file; source was not replaced: $source" >&2
+  exit 1
+fi
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+if ! jq -e '
   {subscribers: (
     (.subscribers // [])
     | if type == "array" then
@@ -449,15 +498,32 @@ jq -e '
          | with_entries(select(.value != null))]
       else [] end
   )}
-' "$source" > "$tmp"
+' "$source" > "$tmp"; then
+  echo "Compaction failed; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if ! size="$(wc -c < "$tmp")"; then
+  echo "Cannot measure recovery output; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if test "$size" -gt $((64 * 1024 * 1024)); then
+  echo "Recovery output is ${size} bytes; source and backup were preserved: $source" >&2
+  exit 1
+fi
+if ! mv -f "$tmp" "$target"; then
+  echo "Replacement failed; source and backup were preserved: $source" >&2
+  exit 1
+fi
+trap - EXIT HUP INT TERM
+openclaw doctor --fix
 ```
 
-Verify that the temporary file is at or below 64 MiB before `mv`, then rerun
-`openclaw doctor --fix`. Doctor imports the compact source and archives the
-original at `<source>.migrated`; retain the separate `.oversized-backup` until
-the imported entries have been checked. If the compact file is still too large,
-do not replace the source: preserve the backup and seek a plugin-specific
-recovery review. Never delete the original or overwrite it before the size
+Both guarded blocks verify that the temporary file is at or below 64 MiB before
+`mv`, then rerun `openclaw doctor --fix`. Doctor imports the compact source and
+archives the original at `<source>.migrated`; retain the separate
+`.oversized-backup` until the imported entries have been checked. If any
+prerequisite fails or the compact file is still too large, the source and backup
+remain unchanged. Never delete the original or overwrite it before the size
 check.
 
 Use `phase: "after-session-repair"` when a migration needs canonical session
