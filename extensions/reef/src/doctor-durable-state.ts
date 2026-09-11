@@ -63,10 +63,17 @@ type LegacyReefReplayLogRecord =
   | { op: "complete"; peer: string; id: string; receipt: SignedReceipt; body?: { enc: string } }
   | { op: "consume" | "release"; peer: string; id: string };
 
+export const REEF_LEGACY_REPLAY_IDENTITY_MAX_BYTES = 256;
+
 function requireLegacyReplayString(record: Record<string, unknown>, field: string): string {
   const value = record[field];
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`invalid Reef replay ${field}`);
+  }
+  if (Buffer.byteLength(value, "utf8") > REEF_LEGACY_REPLAY_IDENTITY_MAX_BYTES) {
+    throw new Error(
+      `Reef replay ${field} exceeds ${REEF_LEGACY_REPLAY_IDENTITY_MAX_BYTES} byte identity limit`,
+    );
   }
   return value;
 }

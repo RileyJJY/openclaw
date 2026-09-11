@@ -14,6 +14,7 @@ import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { generateIdentity, MemoryAuditStore, signReceipt } from "./protocol/index.js";
+import { REEF_LEGACY_REPLAY_IDENTITY_MAX_BYTES } from "./src/doctor-durable-state.js";
 import {
   countStoredReefAuditWindow,
   streamLegacyReefAuditWindow,
@@ -98,19 +99,27 @@ describe("Reef doctor journal capacity", () => {
       const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
       const replayPath = path.join(legacyDir, "replay.jsonl");
       fs.mkdirSync(legacyDir, { recursive: true });
-      // 2,000 claims, each with a ~40 KiB envelope hash, exceed the former
-      // 64 MiB aggregate budget while every record stays under the 65,536-byte
-      // plugin-state value limit and the 3,000-entry replay capacity.
+      // 2,000 completed records, each with a ~40 KiB body, exceed the former
+      // 64 MiB aggregate budget while every immutable identity and intermediate
+      // value stays bounded and the 3,000-entry replay capacity is respected.
       const recordCount = 2_000;
-      const envelopeHash = "c".repeat(40 * 1024);
-      const lines = Array.from({ length: recordCount }, (_, index) =>
-        JSON.stringify({
-          op: "claim",
-          peer: "alice",
-          id: `01JZ000000000000000000000${String(index).padStart(4, "0")}`,
-          envelopeHash,
-        }),
-      );
+      const envelopeHash = "c".repeat(64);
+      const body = "d".repeat(40 * 1024);
+      const lines = Array.from({ length: recordCount }, (_, index) => {
+        const id = `01JZ000000000000000000000${String(index).padStart(4, "0")}`;
+        const receipt = {
+          id,
+          bodyHash: "a".repeat(64),
+          auditHead: "b".repeat(64),
+          status: "accepted",
+          signature: "c".repeat(64),
+        };
+        return [
+          JSON.stringify({ op: "claim", peer: "alice", id, envelopeHash }),
+          JSON.stringify({ op: "complete", peer: "alice", id, receipt, body: { enc: body } }),
+          JSON.stringify({ op: "release", peer: "alice", id }),
+        ];
+      }).flat();
       fs.writeFileSync(replayPath, `${lines.join("\n")}\n`);
       const context = createDoctorContext(env);
       const params = {
@@ -643,14 +652,14 @@ describe("Reef doctor journal capacity", () => {
     });
   });
 
-  it("rejects a legacy replay record that exceeds the plugin-state value limit", async () => {
+  it("rejects a legacy replay record with an oversized immutable identity", async () => {
     await withTempDir("openclaw-reef-doctor-bounds-", async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       vi.spyOn(os, "homedir").mockReturnValue(stateDir);
       const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
       const replayPath = path.join(legacyDir, "replay.jsonl");
       fs.mkdirSync(legacyDir, { recursive: true });
-      const oversizedHash = "c".repeat(24 * 1024 * 1024);
+      const oversizedHash = "c".repeat(REEF_LEGACY_REPLAY_IDENTITY_MAX_BYTES + 1);
       for (let index = 0; index < 3; index += 1) {
         fs.appendFileSync(
           replayPath,
@@ -676,7 +685,7 @@ describe("Reef doctor journal capacity", () => {
       expect(result.changes).toEqual([]);
       expect(result.warnings).toEqual([
         expect.stringContaining(
-          `Reef legacy JSONL replay record exceeds ${MAX_PLUGIN_STATE_VALUE_BYTES} byte plugin-state value limit`,
+          `Reef replay envelopeHash exceeds ${REEF_LEGACY_REPLAY_IDENTITY_MAX_BYTES} byte identity limit`,
         ),
         expect.stringContaining("Reef durable state migration is incomplete"),
       ]);
