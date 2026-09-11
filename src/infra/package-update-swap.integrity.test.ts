@@ -81,6 +81,34 @@ describe("retained npm package integrity", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "accepts a launcher symlink copied under a different umask",
+    async () => {
+      const originalUmask = process.umask();
+      try {
+        await withTestDir({ prefix: "openclaw-launcher-symlink-umask-" }, async (base) => {
+          const fixture = await createPackageSwapFixture(base);
+          await fs.unlink(fixture.launcher);
+          process.umask(0o077);
+          await fs.symlink("../lib/node_modules/openclaw/openclaw.mjs", fixture.launcher);
+          const sourceMode = (await fs.lstat(fixture.launcher)).mode & 0o777;
+          process.umask(0o022);
+
+          const result = await swapStagedPackageInstall(fixture.params);
+
+          if (process.platform === "darwin") {
+            expect(sourceMode).toBe(0o700);
+          }
+          expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+          expect(result.step.stderrTail ?? "").not.toContain("launcher backup changed");
+          await expect(fs.readFile(fixture.launcher, "utf8")).resolves.toBe("candidate launcher\n");
+        });
+      } finally {
+        process.umask(originalUmask);
+      }
+    },
+  );
+
   it.each([false, true])(
     "preserves the retained npm link if its executor is revoked after observation (relative=%s)",
     async (relative) => {

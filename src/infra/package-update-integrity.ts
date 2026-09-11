@@ -329,17 +329,19 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
 
   async function launcher(file: string): Promise<string> {
     const stat = await read(() => fs.lstat(file, { bigint: true }));
-    const contents = stat.isSymbolicLink()
+    const isSymlink = stat.isSymbolicLink();
+    const contents = isSymlink
       ? await read(() => fs.readlink(file))
       : (await hashFile(file, stat, MAX_LAUNCHER_BYTES)).digest;
     if (!unchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
       throw new Error("Package rollback launcher changed during verification");
     }
-    // Launchers are copied, unlike the package tree. Their copy is compared
-    // with the captured contents/target and permissions, not the new inode.
+    // Launchers are copied, unlike the package tree. Symlink modes are applied
+    // from the copying process's umask on macOS, so they are not stable
+    // identity; regular-file permissions remain part of the fingerprint.
     return JSON.stringify([
-      stat.isSymbolicLink() ? "symlink" : "file",
-      stat.mode.toString(),
+      isSymlink ? "symlink" : "file",
+      isSymlink ? null : stat.mode.toString(),
       stat.uid.toString(),
       stat.gid.toString(),
       contents,
