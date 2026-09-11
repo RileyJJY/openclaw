@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { describe, expect, it, vi } from "vitest";
+import { createMemorySearchTool } from "./tools.js";
 
 const managerDebug = {
   backend: "builtin" as const,
@@ -9,8 +10,16 @@ const managerDebug = {
   managerMs: 7,
 };
 
+type MemorySearchManagerParams = {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+  purpose?: string;
+  inspectSources?: boolean;
+  acquireLocalService?: unknown;
+};
+
 const getMemorySearchManagerMock = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn(async (_params: MemorySearchManagerParams) => ({
     manager: null,
     debug: managerDebug,
     error: undefined,
@@ -25,11 +34,16 @@ vi.mock("./memory/index.js", () => ({
   getMemorySearchManager: getMemorySearchManagerMock,
 }));
 
+vi.mock("./tools.runtime.js", () => ({
+  getMemorySearchManager: getMemorySearchManagerMock,
+}));
+
 vi.mock("./session-search-visibility.js", () => ({
   filterMemorySearchHitsBySessionVisibility: filterMemorySearchHitsBySessionVisibilityMock,
 }));
 
-vi.mock("./dreaming-state.js", () => ({
+vi.mock("./dreaming-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dreaming-state.js")>()),
   configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateMock,
 }));
 
@@ -85,16 +99,56 @@ describe("memoryRuntime", () => {
       }),
     ]);
 
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
+    const firstParams = getMemorySearchManagerMock.mock.calls.find(
+      ([params]) => params.agentId === "first",
+    )?.[0];
+    const secondParams = getMemorySearchManagerMock.mock.calls.find(
+      ([params]) => params.agentId === "second",
+    )?.[0];
+    expect(firstParams?.acquireLocalService).toEqual(expect.any(Function));
+    expect(secondParams?.acquireLocalService).toEqual(expect.any(Function));
+    expect(firstParams?.acquireLocalService).not.toBe(firstAcquire);
+    expect(secondParams?.acquireLocalService).not.toBe(secondAcquire);
+    expect(firstParams?.acquireLocalService).not.toBe(secondParams?.acquireLocalService);
+
+    const repeatedRuntime = createMemoryRuntime({ acquireLocalService: firstAcquire });
+    await repeatedRuntime.getMemorySearchManager({ cfg, agentId: "first-again" });
+    const repeatedParams = getMemorySearchManagerMock.mock.calls.find(
+      ([params]) => params.agentId === "first-again",
+    )?.[0];
+    expect(repeatedParams?.acquireLocalService).toBe(firstParams?.acquireLocalService);
+  });
+
+  it("shares local-service acquisition identity between runtime and tool consumers", async () => {
+    getMemorySearchManagerMock.mockClear();
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const acquireLocalService = vi.fn(async () => undefined);
+
+    await createMemoryRuntime({ acquireLocalService }).getMemorySearchManager({
       cfg,
-      agentId: "first",
-      acquireLocalService: firstAcquire,
+      agentId: "main",
     });
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
+    const tool = createMemorySearchTool({
+      config: cfg,
+      agentId: "main",
+      acquireLocalService,
+    });
+    expect(tool).not.toBeNull();
+    await tool?.execute("runtime-tool-runtime", { query: "hello" });
+    await createMemoryRuntime({ acquireLocalService }).getMemorySearchManager({
       cfg,
-      agentId: "second",
-      acquireLocalService: secondAcquire,
+      agentId: "main",
     });
+
+    const adapters = getMemorySearchManagerMock.mock.calls.map(
+      ([params]) => params.acquireLocalService,
+    );
+    expect(adapters).toHaveLength(3);
+    expect(adapters[0]).toEqual(expect.any(Function));
+    expect(adapters[1]).toBe(adapters[0]);
+    expect(adapters[2]).toBe(adapters[0]);
   });
 
   it("binds the scoped state opener inside each lazy runtime instance", async () => {

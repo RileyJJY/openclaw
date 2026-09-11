@@ -24,6 +24,31 @@ const LOCAL_SERVICE_HOST_IDENTITIES = resolveGlobalSingleton<{
   nextId: 1,
 }));
 
+const MEMORY_LOCAL_SERVICE_ADAPTERS_KEY = Symbol.for("openclaw.memoryLocalServiceAdapters");
+
+// Manager caches survive module reloads, so the adapter identity must survive
+// too. Runtime and tool consumers can then share the same manager cache key.
+const LOCAL_SERVICE_ADAPTERS = resolveGlobalSingleton<{
+  adapters: WeakMap<MemoryCoreAcquireLocalService, MemoryCoreAcquireLocalService>;
+}>(MEMORY_LOCAL_SERVICE_ADAPTERS_KEY, () => ({
+  adapters: new WeakMap(),
+}));
+
+export function resolveMemoryCoreLocalServiceAdapter(
+  hostAcquireLocalService: MemoryCoreAcquireLocalService,
+): MemoryCoreAcquireLocalService {
+  const cached = LOCAL_SERVICE_ADAPTERS.adapters.get(hostAcquireLocalService);
+  if (cached) {
+    return cached;
+  }
+  const adapter: MemoryCoreAcquireLocalService = async (target, signal) =>
+    signal === undefined
+      ? await hostAcquireLocalService(target)
+      : await hostAcquireLocalService(target, signal);
+  LOCAL_SERVICE_ADAPTERS.adapters.set(hostAcquireLocalService, adapter);
+  return adapter;
+}
+
 export function resolveMemoryCoreLocalServiceHostIdentity(
   acquireLocalService: MemoryCoreAcquireLocalService | undefined,
 ): string {

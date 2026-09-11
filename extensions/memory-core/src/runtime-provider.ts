@@ -2,6 +2,7 @@
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { configureMemoryCoreDreamingState } from "./dreaming-state.js";
+import { resolveMemoryCoreLocalServiceAdapter } from "./memory/embedding-local-service.js";
 import {
   closeAllMemorySearchManagers,
   closeMemorySearchManager,
@@ -14,12 +15,15 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}) {
   if (host.openKeyedStore) {
     configureMemoryCoreDreamingState(host.openKeyedStore);
   }
+  const acquireLocalService = host.acquireLocalService
+    ? resolveMemoryCoreLocalServiceAdapter(host.acquireLocalService)
+    : undefined;
 
   return {
     async getMemorySearchManager(params) {
       const { manager, debug, error } = await getMemorySearchManager({
         ...params,
-        ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
+        ...(acquireLocalService ? { acquireLocalService } : {}),
       });
       return {
         manager,

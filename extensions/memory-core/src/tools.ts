@@ -20,9 +20,7 @@ import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-hos
 import {
   attemptMemoryCorpus,
   composeMemoryCorpusMetadata,
-  getMemoryCorpusDeadlineControl,
   runMemoryCorpusDeadline,
-  runWithMemoryCorpusDeadlineControl,
   searchMemoryCorpusSupplements,
   unavailableMemoryCorpus,
   type MemoryCorpusAttempt,
@@ -38,6 +36,7 @@ import {
   MEMORY_SEARCH_TOOL_CONTRACT,
   type MemoryToolOptions,
 } from "./memory-tool-contract.js";
+import { resolveMemoryCoreLocalServiceAdapter } from "./memory/embedding-local-service.js";
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
   resolveMemorySearchAbortError,
@@ -80,34 +79,6 @@ const memorySearchToolCooldowns = new Map<
   string,
   MemoryCorpusFailure & { until: number; configKey: string }
 >();
-type MemorySearchLocalService = NonNullable<MemoryToolOptions["acquireLocalService"]>;
-const memorySearchLocalServiceAdapters = new WeakMap<
-  MemorySearchLocalService,
-  MemorySearchLocalService
->();
-
-function resolveMemorySearchLocalServiceAdapter(
-  hostAcquireLocalService: MemorySearchLocalService,
-): MemorySearchLocalService {
-  const cached = memorySearchLocalServiceAdapters.get(hostAcquireLocalService);
-  if (cached) {
-    return cached;
-  }
-  const adapter: MemorySearchLocalService = async (target, localSignal) => {
-    const controlDeadline = getMemoryCorpusDeadlineControl();
-    controlDeadline?.report("pause");
-    try {
-      return await (localSignal === undefined
-        ? hostAcquireLocalService(target)
-        : hostAcquireLocalService(target, localSignal));
-    } finally {
-      controlDeadline?.report("resume");
-    }
-  };
-  memorySearchLocalServiceAdapters.set(hostAcquireLocalService, adapter);
-  return adapter;
-}
-
 /**
  * Validate the model-authored corpus argument against the tool's closed enum.
  * Provider tool schemas do not guarantee enum enforcement; an unknown corpus
@@ -261,11 +232,12 @@ function mergeMemorySearchCorpusResults(params: {
 }
 
 export function createMemorySearchTool(options: MemoryToolOptions) {
-  // Keep this callback stable for the lifetime of the tool. The manager cache
-  // keys on callback identity; the active search deadline is carried separately
-  // through AsyncLocalStorage so concurrent searches still own their budgets.
+  // Keep this callback stable across tool and runtime consumers. The manager
+  // cache keys on callback identity. Provider adapters attach readiness-only
+  // deadline controls to the target, so this adapter must not pause around the
+  // host callback's post-readiness reconciliation.
   const acquireLocalService = options.acquireLocalService
-    ? resolveMemorySearchLocalServiceAdapter(options.acquireLocalService)
+    ? resolveMemoryCoreLocalServiceAdapter(options.acquireLocalService)
     : undefined;
 
   return createMemoryTool({
@@ -451,9 +423,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 parentSignal: callerSignal,
                 run: async (signal, controlDeadline) => {
                   searchSignal = signal;
-                  return await runWithMemoryCorpusDeadlineControl(controlDeadline, () =>
-                    searchMemory(signal, controlDeadline),
-                  );
+                  return await searchMemory(signal, controlDeadline);
                 },
               })
             : Promise.resolve(null);
