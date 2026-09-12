@@ -205,6 +205,22 @@ export function hasOpenAICompletionsModelProgress(chunk: {
   );
 }
 
+export function trackOpenAICompletionsReasoningUsage(
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]> | null | undefined,
+  previousReasoningTokens: number | undefined,
+): { hasProgress: boolean; maxTokens: number } {
+  const reasoningTokens = rawUsage?.completion_tokens_details?.reasoning_tokens;
+  const validReasoningTokens =
+    typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
+      ? reasoningTokens
+      : undefined;
+  return {
+    hasProgress:
+      validReasoningTokens !== undefined && validReasoningTokens > (previousReasoningTokens ?? 0),
+    maxTokens: Math.max(previousReasoningTokens ?? 0, validReasoningTokens ?? 0),
+  };
+}
+
 type OpenAICompletionsReasoningBatch = {
   readonly deltas: readonly OpenAICompletionsContentDelta[];
   readonly mirroredThinking: readonly string[];

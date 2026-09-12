@@ -38,6 +38,7 @@ import {
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
   readOpenAICompletionsReasoningBatch,
+  trackOpenAICompletionsReasoningUsage,
   throwIfModelStreamAborted,
   type MutableAssistantOutput,
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
@@ -452,6 +453,7 @@ export async function processCompletionsStream(
   const cooperativeScheduler = directMode
     ? undefined
     : createModelStreamCooperativeScheduler(options?.signal);
+  let maxReasoningTokens: number | undefined;
   const guardedStream = withFirstStreamEventTimeout(responseStream as AsyncIterable<unknown>, {
     provider: model.provider,
     api: model.api,
@@ -472,9 +474,21 @@ export async function processCompletionsStream(
       continue;
     }
     const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
+    const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
+    const usageForActivity = chunk.usage ?? choice?.usage;
+    const reasoningUsage = trackOpenAICompletionsReasoningUsage(
+      usageForActivity,
+      maxReasoningTokens,
+    );
+    maxReasoningTokens = reasoningUsage.maxTokens;
     // Keep transport liveness alive for every provider chunk, but distinguish
-    // heartbeat-only choices:[] frames from actual model output for diagnostics.
-    notifyLlmRequestActivity(options?.signal, hasOpenAICompletionsModelProgress(chunk));
+    // heartbeat-only choices:[] frames from actual model output for diagnostics. An
+    // advancing usage-only reasoning counter is also model progress, even when the
+    // provider hides the reasoning text and sends no choice delta.
+    notifyLlmRequestActivity(
+      options?.signal,
+      hasOpenAICompletionsModelProgress(chunk) || reasoningUsage.hasProgress,
+    );
     output.responseId ||= chunk.id;
     // Retain the provider-returned model when it differs from the requested id so
     // routed/alias responses are not misattributed, matching the direct provider
@@ -482,16 +496,13 @@ export async function processCompletionsStream(
     if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
       output.responseModel ||= chunk.model;
     }
-    let hasReasoningUsageActivity = false;
     if (chunk.usage) {
       output.usage = parseOpenAICompletionsUsage(chunk.usage, model, {
         includeReasoningTokens: !directMode,
       });
-      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(chunk.usage);
     }
-    const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     if (!choice) {
-      emitReasoningUsageActivity(hasReasoningUsageActivity);
+      emitReasoningUsageActivity(reasoningUsage.hasProgress);
       if (cooperativeScheduler) {
         await cooperativeScheduler.afterEvent();
       }
@@ -502,7 +513,6 @@ export async function processCompletionsStream(
       output.usage = parseOpenAICompletionsUsage(choiceUsage, model, {
         includeReasoningTokens: !directMode,
       });
-      hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
       const finishReasonResult = mapOpenAIStopReason(choice.finish_reason, {
@@ -516,7 +526,7 @@ export async function processCompletionsStream(
     }
     const rawChoiceDelta = choice.delta ?? choice.message;
     if (!rawChoiceDelta) {
-      emitReasoningUsageActivity(hasReasoningUsageActivity);
+      emitReasoningUsageActivity(reasoningUsage.hasProgress);
       if (cooperativeScheduler) {
         await cooperativeScheduler.afterEvent();
       }
@@ -655,7 +665,7 @@ export async function processCompletionsStream(
       encryptedReasoning?.consumeDetails(deltaFields.reasoning_details);
     }
     flushPendingPostToolCallDeltas();
-    emitReasoningUsageActivity(hasReasoningUsageActivity);
+    emitReasoningUsageActivity(reasoningUsage.hasProgress);
     if (cooperativeScheduler) {
       await cooperativeScheduler.afterEvent();
     }
@@ -722,13 +732,4 @@ export function shouldEmitOpenAICompletionsReasoning(
     return false;
   }
   return true;
-}
-
-function hasOpenAICompletionsReasoningUsageActivity(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
-) {
-  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
-  return (
-    typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens) && reasoningTokens > 0
-  );
 }
