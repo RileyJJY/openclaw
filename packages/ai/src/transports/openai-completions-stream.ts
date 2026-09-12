@@ -40,6 +40,7 @@ import {
 } from "./openai-completions-dsml.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
+  hasOpenAICompletionsModelProgress,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
@@ -412,9 +413,10 @@ export async function processCompletionsStream(
     if (!rawChunk || typeof rawChunk !== "object") {
       continue;
     }
-    // Hidden reasoning is still provider progress; keep the idle watchdog alive without exposing it.
-    notifyLlmRequestActivity(options?.signal);
     const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
+    // Keep transport liveness alive for every provider chunk, but distinguish
+    // heartbeat-only choices:[] frames from actual model output for diagnostics.
+    notifyLlmRequestActivity(options?.signal, hasOpenAICompletionsModelProgress(chunk));
     output.responseId ||= chunk.id;
     // Retain the provider-returned model when it differs from the requested id so
     // routed/alias responses are not misattributed, matching the direct provider
