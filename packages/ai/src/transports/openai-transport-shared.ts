@@ -184,6 +184,27 @@ export type OpenAICompletionsContentDelta =
   | { kind: "thinking"; signature?: string; text: string }
   | { kind: "text"; text: string; source?: OpenAICompletionsTextSource };
 
+export function hasOpenAICompletionsModelProgress(chunk: {
+  choices?: Array<{ delta?: unknown; message?: unknown }>;
+}): boolean {
+  return (
+    chunk.choices?.some((choice) => {
+      const delta = choice.delta ?? choice.message;
+      if (!delta || typeof delta !== "object") {
+        return false;
+      }
+      return Object.entries(delta).some(([key, value]) => {
+        if (key === "role" || value == null) {
+          return false;
+        }
+        return typeof value === "string"
+          ? value.length > 0
+          : !Array.isArray(value) || value.length > 0;
+      });
+    }) ?? false
+  );
+}
+
 type OpenAICompletionsReasoningBatch = {
   readonly deltas: readonly OpenAICompletionsContentDelta[];
   readonly mirroredThinking: readonly string[];
