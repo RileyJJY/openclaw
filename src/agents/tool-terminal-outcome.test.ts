@@ -125,7 +125,11 @@ describe("tool terminal outcome observer", () => {
                 { type: "toolCall", id: "call-second", name: "second", arguments: {} },
               ])
             : steeringAssistant([{ type: "text", text: "steering reply" }]);
-        stream.push({ type: "done", reason: message.stopReason, message });
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
         stream.end();
       });
       return stream;
