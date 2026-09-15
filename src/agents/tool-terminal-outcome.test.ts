@@ -14,6 +14,51 @@ import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 describe("tool terminal outcome observer", () => {
   afterEach(() => resetAdjustedParamsByToolCallIdForTests());
 
+  it("does not record a steering skip as a tool failure", () => {
+    const terminal = createToolTerminalObserver("run-steering-skip")({
+      toolName: "exec",
+      arguments: { command: "echo interrupted" },
+      executionStarted: false,
+      outcome: "failure",
+      result: { details: { status: "skipped", deniedReason: "steering" } },
+      failure: { error: "Skipped due to queued user message." },
+    });
+
+    expect(terminal.lastToolError).toBeUndefined();
+    expect(buildPayloads({ lastToolError: terminal.lastToolError })).toEqual([]);
+  });
+
+  it("preserves a genuine pre-execution failure across a steering skip", () => {
+    const observe = createToolTerminalObserver("run-steering-admission");
+    const admissionBlock = observe({
+      toolName: "exec",
+      arguments: { command: "echo denied" },
+      executionStarted: false,
+      outcome: "failure",
+      result: { details: { status: "blocked", deniedReason: "tool-admission" } },
+      failure: { error: "Tool execution was blocked before launch." },
+    });
+
+    const afterSteeringSkip = observe({
+      toolName: "exec",
+      arguments: { command: "echo interrupted" },
+      executionStarted: false,
+      outcome: "failure",
+      result: { details: { status: "skipped", deniedReason: "steering" } },
+      failure: { error: "Skipped due to queued user message." },
+    });
+
+    expect(admissionBlock.lastToolError).toMatchObject({
+      error: "Tool execution was blocked before launch.",
+    });
+    expect(afterSteeringSkip.lastToolError).toMatchObject({
+      error: "Tool execution was blocked before launch.",
+    });
+    expect(buildPayloads({ lastToolError: afterSteeringSkip.lastToolError })).toEqual([
+      expect.objectContaining({ text: "⚠️ Exec blocked", isError: true }),
+    ]);
+  });
+
   it("retains a genuine message failure across suppression until a real send succeeds", () => {
     const observe = createToolTerminalObserver("run-suppression");
     const suppression = {
