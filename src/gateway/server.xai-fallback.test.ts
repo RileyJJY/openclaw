@@ -276,10 +276,10 @@ it(
             scenario,
           )
           .toHaveLength(2);
-        const terminal = events.filter(
-          (event) =>
-            event.runId === started.runId && event.state === "final" && event.stopReason === "stop",
-        );
+        const runEvents = events.filter((event) => event.runId === started.runId);
+        const terminal = runEvents
+          .filter((event) => event.state === "final")
+          .filter((event) => event.stopReason === "stop");
         if (["fallback", "continuation", "visible-fallback"].includes(scenario)) {
           const expected = scenario === "continuation" ? continuation : marker;
           if (scenario === "continuation") {
@@ -296,9 +296,7 @@ it(
         } else {
           expect.soft(completed.status, scenario).toBe("error");
           expect.soft(messageText(assistant), scenario).toBe(prefix);
-          const deltas = events.filter(
-            (event) => event.runId === started.runId && event.state === "delta",
-          );
+          const deltas = runEvents.filter((event) => event.state === "delta");
           expect.soft(messageText(deltas.at(-1)?.message), scenario).toBe(prefix);
           if (scenario === "no-fallback") {
             expect.soft(requests, scenario).not.toContain(fallbackModel);
