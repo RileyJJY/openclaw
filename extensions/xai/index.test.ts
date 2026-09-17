@@ -621,6 +621,21 @@ describe("xai provider plugin", () => {
     ).toBe("rate_limit");
   });
 
+  it("classifies statusless token-generation failures for failover", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage: "Internal error during token generation",
+      }),
+    ).toBe("server_error");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage: '403 {"error":"Incorrect API key provided"}',
+      }),
+    ).toBeUndefined();
+  });
+
   it("registers xAI speech providers for batch and streaming STT", async () => {
     const { mediaProviders, realtimeTranscriptionProviders } = await registerProviderPlugin({
       plugin,

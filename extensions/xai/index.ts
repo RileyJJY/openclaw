@@ -64,6 +64,7 @@ const PROVIDER_ID = "xai";
 const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
   /\b(?:used all available credits|run out of credits|monthly spending limit|purchase more credits|raise your spending limit|need a Grok subscription)\b/i;
 const XAI_RATE_LIMIT_RE = /\b(?:rate limit exceeded|too many requests)\b/i;
+const XAI_PROVIDER_INTERNAL_ERROR_RE = /\binternal error during token generation\b/i;
 
 const loadCodeExecutionModule = createLazyRuntimeModule(() => import("./code-execution.js"));
 
@@ -75,6 +76,9 @@ function classifyXaiFailoverReason(errorMessage: string) {
   }
   if (XAI_RATE_LIMIT_RE.test(errorMessage)) {
     return "rate_limit" as const;
+  }
+  if (XAI_PROVIDER_INTERNAL_ERROR_RE.test(errorMessage)) {
+    return "server_error" as const;
   }
   return undefined;
 }
