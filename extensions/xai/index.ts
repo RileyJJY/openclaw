@@ -1,6 +1,9 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Xai plugin entrypoint registers its OpenClaw integration.
-import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginToolContext,
+  ProviderFailoverErrorContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
@@ -70,14 +73,24 @@ const loadCodeExecutionModule = createLazyRuntimeModule(() => import("./code-exe
 
 const loadXSearchModule = createLazyRuntimeModule(() => import("./x-search.js"));
 
-function classifyXaiFailoverReason(errorMessage: string) {
+function classifyXaiFailoverReason({
+  errorMessage,
+  status,
+  code,
+  errorType,
+}: ProviderFailoverErrorContext) {
   if (XAI_CREDIT_OR_SPENDING_LIMIT_RE.test(errorMessage)) {
     return "billing" as const;
   }
   if (XAI_RATE_LIMIT_RE.test(errorMessage)) {
     return "rate_limit" as const;
   }
-  if (XAI_PROVIDER_INTERNAL_ERROR_RE.test(errorMessage)) {
+  if (
+    status === undefined &&
+    code === undefined &&
+    errorType === undefined &&
+    XAI_PROVIDER_INTERNAL_ERROR_RE.test(errorMessage)
+  ) {
     return "server_error" as const;
   }
   return undefined;
@@ -311,7 +324,7 @@ export default defineSingleProviderPluginEntry({
     fetchUsageSnapshot: async (ctx) => await fetchXaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
-    classifyFailoverReason: ({ errorMessage }) => classifyXaiFailoverReason(errorMessage),
+    classifyFailoverReason: classifyXaiFailoverReason,
   }),
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());
