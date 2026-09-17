@@ -16,10 +16,7 @@ import {
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import {
-  dispatchChannelMessageAction,
-  isFencedProviderReadAction,
-} from "../../channels/plugins/message-action-dispatch.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import { isChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
@@ -93,7 +90,10 @@ import {
   runGatewayInflightWork,
   type GatewayInflightResult as InflightResult,
 } from "./inflight.js";
-import { resolveTrustedMessageActionToolContext } from "./message-action-context.js";
+import {
+  createMessageActionRuntimeAuthority,
+  resolveTrustedMessageActionToolContext,
+} from "./message-action-context.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -903,21 +903,15 @@ export const sendHandlers: GatewayRequestHandlers = {
       client,
       requestedOrigin: request.conversationReadOrigin,
     });
-    const assertScheduledReadCurrent = isFencedProviderReadAction(request.action)
-      ? trustedContext.messageActionAuthorization?.scheduled?.assertCurrent
-      : undefined;
-    const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(
+    const messageAuthority = createMessageActionRuntimeAuthority({
       client,
       context,
       respond,
-      assertScheduledReadCurrent
-        ? () => {
-            sessionMutationCommitGuard?.();
-            assertScheduledReadCurrent();
-          }
-        : sessionMutationCommitGuard,
-    );
-    const assertDirectAdapterHandoff = agentRuntimeAuthority.commitGuard;
+      sessionMutationCommitGuard,
+      request,
+      authorization: trustedContext.messageActionAuthorization,
+    });
+    const assertDirectAdapterHandoff = messageAuthority.agentRuntimeAuthority.commitGuard;
     const onPlatformSendDispatch = assertDirectAdapterHandoff
       ? async () => assertDirectAdapterHandoff()
       : undefined;
@@ -930,13 +924,13 @@ export const sendHandlers: GatewayRequestHandlers = {
       requestChannel: request.channel,
       bindingAccountIds: [request.accountId, request.params.accountId],
       routeAccountIds: (binding) => [
-        request.accountId,
+        messageAuthority.routeAccountId,
         request.params.accountId,
         binding?.reservedRoute?.accountId,
       ],
       conflictMessage: "message.action accountId does not match params.accountId",
-      authorize: agentRuntimeAuthority.hasActive,
-      replayResults: assertScheduledReadCurrent === undefined,
+      authorize: messageAuthority.agentRuntimeAuthority.hasActive,
+      replayResults: messageAuthority.assertReadCurrent === undefined,
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
           requestChannel,
@@ -976,7 +970,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       work: async ({ cfg, channel, plugin, canonicalAction, accountId, dedupeKey, authorize }) => {
         try {
           const completed = await withChannelReadAuthority(
-            request.action === "download-file" || assertScheduledReadCurrent
+            request.action === "download-file" || messageAuthority.assertReadCurrent
               ? assertDirectAdapterHandoff
               : undefined,
             async () => {
@@ -1148,7 +1142,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   : {}),
               };
               let payload: unknown;
-              if (canonicalAction) {
+              if (canonicalAction || messageAuthority.assertScheduledWriteCurrent) {
                 const { runMessageAction } =
                   await import("../../infra/outbound/message-action-runner.js");
                 const result = await runMessageAction({

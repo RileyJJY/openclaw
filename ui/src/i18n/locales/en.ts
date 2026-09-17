@@ -25,6 +25,7 @@ export const en: TranslationMap & {
   configPage: TranslationMap;
   connection: TranslationMap;
   configView: TranslationMap;
+  custodian: TranslationMap;
   debug: TranslationMap & {
     lanes: TranslationMap & Record<"lane" | "active" | "queued" | "blocked", string>;
     overlay: TranslationMap &
@@ -47,9 +48,10 @@ export const en: TranslationMap & {
   devices: TranslationMap;
   desktop: TranslationMap &
     Record<"title" | "openWindow" | "unavailable" | "toggle" | "reconnect" | "connecting", string>;
-  filePreview: TranslationMap & { bundle: TranslationMap };
+  filePreview: TranslationMap;
   updates: TranslationMap;
   login: TranslationMap;
+  modelSetup: TranslationMap;
   newSession: TranslationMap;
   skillWorkshop: TranslationMap;
   systems: TranslationMap;
@@ -254,21 +256,6 @@ export const en: TranslationMap & {
   filePreview: {
     bundle: {},
     label: "Support files",
-    listLabel: "Files",
-    searchPlaceholder: "Search files…",
-    readOnly: "read-only",
-    emptyTitle: "No files match",
-    emptySubtitle: "Try another file name or content search.",
-    copyFile: "Copy file",
-    fileCount: "{count} files",
-    filteredFileCount: "{count}/{total} files",
-    noMatches: "No files match.",
-    navigate: "navigate",
-    kind: {
-      text: "Text",
-      shell: "Shell",
-      file: "File",
-    },
   },
   mcpApp: {
     title: "MCP App",
@@ -1788,7 +1775,9 @@ export const en: TranslationMap & {
       gatewayAuth: "Gateway auth",
       execPolicy: "Exec policy",
       browserEnabled: "Browser enabled",
-      toolProfile: "Tool profile",
+      toolProfile: "Available tools",
+      toolProfileDefault:
+        "Using core and default plugin tools. Choose Full to include available optional plugin tools.",
     },
     system: {
       gatewayHost: "Gateway Host",
@@ -2058,8 +2047,9 @@ export const en: TranslationMap & {
     profileOff: "Profile Off",
     notLive: "Not Live",
     otherAgent: "Other Agent",
-    title: "Tool Access",
-    subtitle: "Profile + per-tool overrides for this agent.",
+    title: "Available Tools",
+    subtitle:
+      "Choose tools for this agent. Full selects tools; it does not grant Full Access execution permissions.",
     enabledSummary: "{enabled}/{total} enabled.",
     enableAll: "Enable All",
     disableAll: "Disable All",
@@ -2079,10 +2069,10 @@ export const en: TranslationMap & {
     noAvailable: "No tools are available for this session right now.",
     moreLiveTitle: "{count} more live tools are available in the groups below.",
     moreLive: "+{count} more live tools",
-    quickPresets: "Quick Presets",
+    quickPresets: "Tool Presets",
     catalogTitle: "Tool Catalog",
     inherit: "Inherit",
-    profile: "Profile",
+    profile: "Tool profile",
     source: "Source",
     live: "Live",
     status: "Status",
@@ -2117,59 +2107,7 @@ export const en: TranslationMap & {
     extra: "Extra Skills",
     other: "Other Skills",
   },
-  skillsPage: {
-    title: "Skills",
-    tabs: {
-      all: "All",
-      ready: "Ready",
-      needsSetup: "Needs Setup",
-      disabled: "Disabled",
-    },
-    defaultAgent: "{name} (default)",
-    filterPlaceholder: "Filter installed skills",
-    shown: "{count} shown",
-    clawHub: "ClawHub",
-    clawHubSubtitle: "Search and install skills from the registry",
-    searchClawHub: "Search ClawHub skills…",
-    searching: "Searching…",
-    disconnected: "Not connected to gateway.",
-    empty: "No skills found.",
-    noClawHubResults: "No skills found on ClawHub.",
-    notScannedByClawHub: "Not scanned by ClawHub",
-    install: "Install",
-    installed: "Installed",
-    installing: "Installing…",
-    close: "Close",
-    by: "By",
-    latest: "Latest: v{version}",
-    platforms: "Platforms: {platforms}",
-    installNamed: "Install {name}",
-    notFound: "Skill not found.",
-    openDetails: "Open {name} details",
-    enabledNamed: "{name} enabled",
-    invalidLink: "ClawHub link invalid",
-    overview: "Overview",
-    skillCard: "Skill Card",
-    missingRequirements: "Missing requirements",
-    reason: "Reason: {reasons}",
-    disabled: "Disabled",
-    enabled: "Enabled",
-    apiKey: "API key",
-    getKey: "Get your key:",
-    saveKey: "Save key",
-    source: "Source:",
-    refreshing: "Refreshing…",
-    fullSecurityReport: "Full security report",
-    loadingSkillCard: "Loading Skill Card…",
-    skillCardNotLoaded: "Skill Card not loaded.",
-    verdict: {
-      unavailable: "Unavailable",
-      clean: "Clean",
-      pending: "Pending",
-      blocked: "Blocked",
-      review: "Review",
-    },
-  },
+  skillsPage: {},
   skillStatus: {
     bundled: "bundled",
     eligible: "eligible",
@@ -2448,27 +2386,7 @@ export const en: TranslationMap & {
     sources: "Auto-start sources",
   },
   cloudWorkersPage: {},
-  portalsPage: {
-    listLabel: "Active portals",
-    portLabel: "Port {port}",
-    openNewTab: "Open in new tab",
-    closePortal: "Close {title}",
-    previewTitle: "{title} portal preview",
-    loading: "Loading portals…",
-    emptyHint: "Ask the agent to start a portal:",
-    promptShow: "Show me in a portal.",
-    promptStart: "Start the application in a portal.",
-    promptMakeAvailable: "Make the server available in a portal.",
-    unsupported: "This gateway does not support portals.",
-    loadFailed: "Could not load portals: {error}",
-    closeFailed: "Could not close the portal: {error}",
-    unreachableTitle: "Portal not reachable from this browser",
-    unreachableBody:
-      "The Gateway is likely being accessed through a proxy or tunnel that exposes only its main port. Open this URL from a browser on the Gateway host.",
-    writeAccessRequiredTitle: "Write access required",
-    writeAccessRequiredBody: "This portal requires an operator with write access.",
-    retry: "Retry",
-  },
+  portalsPage: {},
   modelSetup: {
     missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
     commandHint: "Try /models or /help.",
@@ -2490,17 +2408,7 @@ export const en: TranslationMap & {
       wait: "The previous setup attempt may still be running. Check again can refresh its result. If no model appears, check again after {time} to choose a provider.",
       useCurrent: "Verify & use selected model",
     },
-    verify: {
-      title: "Selected model",
-      button: "Check model",
-      retry: "Try again",
-      checkAgain: "Check again",
-      checkingButton: "Checking…",
-      checking: "Checking — asking {modelRef} for a quick reply…",
-      ready: "Ready",
-      readyIn: "Ready · {latencyMs} ms",
-      providerUnavailable: "{provider} isn’t responding.",
-    },
+    verify: {},
     access: {
       adminRequired: "Model setup requires operator.admin access.",
       gatewayTooOld: "The Gateway is running an older OpenClaw version",
@@ -2515,13 +2423,7 @@ export const en: TranslationMap & {
       retry: "Retry test",
       testingButton: "Testing…",
     },
-    nativeDiscovery: {
-      title: "Discover existing conversations",
-      body: "Show native assistant conversations from this Gateway host in OpenClaw. This is discovery, not an import or copy.",
-      enable: "Show existing native conversations",
-      decline:
-        "Leave unchecked to keep native session catalogs off when you connect your AI provider. Existing installations are not changed.",
-    },
+    nativeDiscovery: {},
     empty: {
       title: "Recommended installs",
       intro: "No existing AI access was detected. Install one of these tools, then check again.",
@@ -2562,16 +2464,8 @@ export const en: TranslationMap & {
       verifyHint: "OpenClaw verifies a real model reply before marking the connection ready.",
       required: "Choose a provider and enter an API key or token.",
     },
-    success: {
-      title: "Connection verified",
-      body: "OpenClaw received a real reply from {modelRef}. You can start chatting now.",
-      activeModel: "Active model",
-      latency: "Verified in {latencyMs} ms",
-      openChat: "Start chatting",
-      continueSetup: "Continue setup",
-      stayHere: "Stay in settings",
-      configuredModel: "Configured model",
-    },
+    success: {},
+    utility: {},
     failure: {
       auth: "Authentication failed",
       rateLimit: "Rate limited",
@@ -4409,10 +4303,10 @@ export const en: TranslationMap & {
     },
     modelControls: {},
     permissionControls: {
-      label: "Permissions",
-      help: "Choose permissions for this session.",
+      label: "Execution permissions",
+      help: "Choose what available tools may do in this session. This does not change the tool profile.",
       default: "Default",
-      defaultDescription: "Follow the agent's configured policy.",
+      defaultDescription: "Follow the agent's configured execution permissions.",
       defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",

@@ -1,5 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  type MessageActionParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  isFencedProviderReadAction,
+  isScheduledMessageWriteAction,
+} from "../../channels/plugins/message-action-dispatch.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -13,7 +21,48 @@ import {
   selectMessageActionRequesterIdentity,
   type MessageActionAuthorization,
 } from "../message-action-turn-capability.js";
+import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+/** Retain the live caller and scheduled source through this action's requests. */
+export function createMessageActionRuntimeAuthority(
+  params: Pick<
+    Parameters<GatewayRequestHandlers["message.action"]>[0],
+    "client" | "context" | "respond" | "sessionMutationCommitGuard"
+  > & {
+    request: Pick<MessageActionParams, "action" | "accountId" | "params">;
+    authorization?: MessageActionAuthorization;
+  },
+) {
+  const assertReadCurrent = isFencedProviderReadAction(params.request.action)
+    ? (params.authorization?.scheduled?.assertCurrent ??
+      params.authorization?.assertDashboardReadCurrent)
+    : undefined;
+  const assertScheduledWriteCurrent = isScheduledMessageWriteAction(params.request.action)
+    ? params.authorization?.scheduled?.assertCurrent
+    : undefined;
+  const assertActionCurrent = assertReadCurrent ?? assertScheduledWriteCurrent;
+  const scheduledPolicy = assertReadCurrent ? params.authorization?.scheduled?.policy : undefined;
+  return {
+    assertReadCurrent,
+    assertScheduledWriteCurrent,
+    routeAccountId:
+      normalizeOptionalString(params.request.accountId) ??
+      normalizeOptionalString(params.request.params.accountId) ??
+      (scheduledPolicy?.mode === "account" ? scheduledPolicy.ownerAccountId : undefined),
+    agentRuntimeAuthority: createAgentRuntimeAuthorityGuard(
+      params.client,
+      params.context,
+      params.respond,
+      assertActionCurrent
+        ? () => {
+            params.sessionMutationCommitGuard?.();
+            assertActionCurrent();
+          }
+        : params.sessionMutationCommitGuard,
+    ),
+  };
+}
 
 export function resolveTrustedMessageActionToolContext(params: {
   client: Parameters<GatewayRequestHandlers["message.action"]>[0]["client"];

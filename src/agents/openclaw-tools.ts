@@ -608,7 +608,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentGroupSpace: options?.agentGroupSpace,
             agentMemberRoleIds: options?.agentMemberRoleIds,
             sandboxed: options?.sandboxed,
-            config: resolvedConfig,
+            config: sessionConfig,
             requesterAgentIdOverride: sessionAgentId,
             requesterRunId: options?.runId,
             swarmCollector: options?.swarmCollector,
