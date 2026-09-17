@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
+import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -13,7 +15,15 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const primaryModel = "grok-4.6";
 const fallbackModel = "fallback-proof";
 const marker = "XAI_FALLBACK_REPLY";
-const scenarios = ["fallback", "no-fallback", "exhausted"] as const;
+const prefix = "The answer is";
+const continuation = "The answer is 42.";
+const scenarios = [
+  "fallback",
+  "continuation",
+  "visible-fallback",
+  "no-fallback",
+  "exhausted",
+] as const;
 type Scenario = (typeof scenarios)[number];
 const model = (id: string) => ({
   id,
@@ -26,6 +36,19 @@ const model = (id: string) => ({
   maxTokens: 256,
 });
 const event = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
+
+function messageText(message: unknown): string {
+  if (!isRecord(message) || !Array.isArray(message.content)) {
+    return "";
+  }
+  return message.content
+    .flatMap((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? [block.text]
+        : [],
+    )
+    .join("\n");
+}
 
 it(
   "chat.send recovers a statusless xAI failure with reported usage only through configured fallback",
@@ -64,6 +87,7 @@ it(
     }
     let scenario: Scenario = "fallback";
     let requests: string[] = [];
+    const events: ChatEvent[] = [];
     const provider = createServer(async (request, response) => {
       if (request.method === "GET" && request.url === "/v1/models") {
         response.writeHead(200, { "content-type": "application/json" });
@@ -79,7 +103,34 @@ it(
       const payload: { model: string } = JSON.parse(body);
       requests.push(payload.model);
       response.writeHead(200, { "content-type": "text/event-stream" });
-      if (payload.model === primaryModel || scenario === "exhausted") {
+      const recovered = scenario === "continuation" && requests.length === 2;
+      if ((payload.model === primaryModel && !recovered) || scenario === "exhausted") {
+        const item = {
+          type: "message",
+          id: `failed-${requests.length}`,
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: prefix, annotations: [] }],
+        };
+        if (scenario !== "fallback") {
+          response.write(
+            event({
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { ...item, status: "in_progress", content: [] },
+            }),
+          );
+          response.write(
+            event({
+              type: "response.output_text.delta",
+              output_index: 0,
+              item_id: item.id,
+              content_index: 0,
+              delta: prefix,
+            }),
+          );
+          response.write(event({ type: "response.output_item.done", output_index: 0, item }));
+        }
         response.end(
           event({
             type: "response.failed",
@@ -87,7 +138,7 @@ it(
               id: `failure-${requests.length}`,
               status: "failed",
               error: { code: null, message: "Internal error during token generation" },
-              output: [],
+              output: scenario === "fallback" ? [] : [item],
               usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
             },
           }),
@@ -99,7 +150,9 @@ it(
         id: "fallback",
         role: "assistant",
         status: "completed",
-        content: [{ type: "output_text", text: marker, annotations: [] }],
+        content: [
+          { type: "output_text", text: recovered ? continuation : marker, annotations: [] },
+        ],
       };
       response.end(
         [
@@ -175,6 +228,11 @@ it(
         },
         configPath,
         token: "xai-fallback-test",
+        onEvent: (event) => {
+          if (event.event === "chat") {
+            events.push(event.payload as ChatEvent);
+          }
+        },
       });
       const installed = getActivePluginRegistry()?.providers.find(
         (entry) => entry.provider.id === "xai",
@@ -191,7 +249,10 @@ it(
           deliver: false,
           idempotencyKey: `xai-${scenario}`,
         });
-        const completed = await gateway.client.request<{ status: string }>(
+        const completed = await gateway.client.request<{
+          status: string;
+          terminalReply?: { text?: string };
+        }>(
           "agent.wait",
           {
             runId: started.runId,
@@ -211,14 +272,30 @@ it(
             scenario,
           )
           .toHaveLength(2);
-        if (scenario === "fallback") {
-          expect.soft(requests, scenario).toContain(fallbackModel);
+        const terminal = events.filter(
+          (event) =>
+            event.runId === started.runId && event.state === "final" && event.stopReason === "stop",
+        );
+        if (["fallback", "continuation", "visible-fallback"].includes(scenario)) {
+          const expected = scenario === "continuation" ? continuation : marker;
+          if (scenario === "continuation") {
+            expect.soft(requests, scenario).not.toContain(fallbackModel);
+          } else {
+            expect.soft(requests, scenario).toContain(fallbackModel);
+          }
           expect.soft(completed.status, scenario).toBe("ok");
           expect.soft(assistant?.stopReason, scenario).toBe("stop");
-          expect.soft(JSON.stringify(assistant?.content), scenario).toContain(marker);
+          expect.soft(messageText(assistant), scenario).toBe(expected);
+          expect.soft(completed.terminalReply?.text, scenario).toBe(expected);
+          expect.soft(terminal, scenario).toHaveLength(1);
+          expect.soft(messageText(terminal[0]?.message), scenario).toBe(expected);
         } else {
           expect.soft(completed.status, scenario).toBe("error");
-          expect.soft(JSON.stringify(assistant?.content), scenario).not.toContain(marker);
+          expect.soft(messageText(assistant), scenario).toBe(prefix);
+          const deltas = events.filter(
+            (event) => event.runId === started.runId && event.state === "delta",
+          );
+          expect.soft(messageText(deltas.at(-1)?.message), scenario).toBe(prefix);
           if (scenario === "no-fallback") {
             expect.soft(requests, scenario).not.toContain(fallbackModel);
           } else {
