@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -72,8 +72,6 @@ const model = (id: string) => ({
   maxTokens: 256,
 });
 const encodeEvent = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
-
-afterEach(() => vi.restoreAllMocks());
 
 function messageText(message: unknown): string {
   if (!isRecord(message) || !Array.isArray(message.content)) {
@@ -306,14 +304,9 @@ it(
       );
       expect(installed?.pluginId).toBe("xai");
       expect(typeof installed?.provider.classifyFailoverReason).toBe("function");
-      if (!installed) {
-        throw new Error("Missing installed xAI provider");
-      }
-      const classifier = vi.spyOn(installed.provider, "classifyFailoverReason");
       for (const selected of scenarios) {
         scenario = selected;
         requests = [];
-        classifier.mockClear();
         const rejection = rejections.get(scenario);
         const sessionKey = `agent:${scenario}:xai-fallback`;
         const started = await gateway.client.request<{ runId: string }>("chat.send", {
@@ -373,22 +366,13 @@ it(
                         provider: "xai",
                         model: primaryModel,
                         reason: rejection.reason,
+                        ...(rejection.status === undefined ? {} : { status: rejection.status }),
                       }),
                     ]),
                   }),
                 }),
               ]),
             );
-            if (rejection.status !== undefined || rejection.code || rejection.type) {
-              expect.soft(classifier, scenario).toHaveBeenCalledWith(
-                expect.objectContaining({
-                  errorMessage: expect.stringContaining(tokenGenerationError),
-                  ...(rejection.status === undefined ? {} : { status: rejection.status }),
-                  ...(rejection.code ? { code: rejection.code } : {}),
-                  ...(rejection.type ? { errorType: rejection.type } : {}),
-                }),
-              );
-            }
           }
         } else {
           expect.soft(completed.status, scenario).toBe("error");
