@@ -35,7 +35,7 @@ const model = (id: string) => ({
   contextWindow: 16_000,
   maxTokens: 256,
 });
-const event = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
+const encodeEvent = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
 
 function messageText(message: unknown): string {
   if (!isRecord(message) || !Array.isArray(message.content)) {
@@ -51,7 +51,7 @@ function messageText(message: unknown): string {
 }
 
 it(
-  "chat.send recovers a statusless xAI failure with reported usage only through configured fallback",
+  "chat.send recovers statusless xAI failures and preserves selected replies",
   {
     timeout: 180_000,
   },
@@ -88,91 +88,95 @@ it(
     let scenario: Scenario = "fallback";
     let requests: string[] = [];
     const events: ChatEvent[] = [];
-    const provider = createServer(async (request, response) => {
-      if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: primaryModel }, { id: fallbackModel }] }));
-        return;
-      }
-      expect(request.method).toBe("POST");
-      expect(request.url).toBe("/v1/responses");
-      let body = "";
-      for await (const chunk of request) {
-        body += chunk;
-      }
-      const payload: { model: string } = JSON.parse(body);
-      requests.push(payload.model);
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      const recovered = scenario === "continuation" && requests.length === 2;
-      if ((payload.model === primaryModel && !recovered) || scenario === "exhausted") {
-        const item = {
+    const provider = createServer((request, response) => {
+      void (async () => {
+        if (request.method === "GET" && request.url === "/v1/models") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ data: [{ id: primaryModel }, { id: fallbackModel }] }));
+          return;
+        }
+        expect(request.method).toBe("POST");
+        expect(request.url).toBe("/v1/responses");
+        let body = "";
+        for await (const chunk of request) {
+          body += chunk;
+        }
+        const payload: { model: string } = JSON.parse(body);
+        requests.push(payload.model);
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        const recovered = scenario === "continuation" && requests.length === 2;
+        if ((payload.model === primaryModel && !recovered) || scenario === "exhausted") {
+          const item = {
+            type: "message",
+            id: `failed-${requests.length}`,
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: prefix, annotations: [] }],
+          };
+          if (scenario !== "fallback") {
+            response.write(
+              encodeEvent({
+                type: "response.output_item.added",
+                output_index: 0,
+                item: { ...item, status: "in_progress", content: [] },
+              }),
+            );
+            response.write(
+              encodeEvent({
+                type: "response.output_text.delta",
+                output_index: 0,
+                item_id: item.id,
+                content_index: 0,
+                delta: prefix,
+              }),
+            );
+            response.write(
+              encodeEvent({ type: "response.output_item.done", output_index: 0, item }),
+            );
+          }
+          response.end(
+            encodeEvent({
+              type: "response.failed",
+              response: {
+                id: `failure-${requests.length}`,
+                status: "failed",
+                error: { code: null, message: "Internal error during token generation" },
+                output: scenario === "fallback" ? [] : [item],
+                usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
+              },
+            }),
+          );
+          return;
+        }
+        const message = {
           type: "message",
-          id: `failed-${requests.length}`,
+          id: "fallback",
           role: "assistant",
           status: "completed",
-          content: [{ type: "output_text", text: prefix, annotations: [] }],
+          content: [
+            { type: "output_text", text: recovered ? continuation : marker, annotations: [] },
+          ],
         };
-        if (scenario !== "fallback") {
-          response.write(
-            event({
+        response.end(
+          [
+            encodeEvent({
               type: "response.output_item.added",
               output_index: 0,
-              item: { ...item, status: "in_progress", content: [] },
+              item: { ...message, status: "in_progress", content: [] },
             }),
-          );
-          response.write(
-            event({
-              type: "response.output_text.delta",
-              output_index: 0,
-              item_id: item.id,
-              content_index: 0,
-              delta: prefix,
+            encodeEvent({ type: "response.output_item.done", output_index: 0, item: message }),
+            encodeEvent({
+              type: "response.completed",
+              response: {
+                id: "fallback-response",
+                status: "completed",
+                output: [message],
+                usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+              },
             }),
-          );
-          response.write(event({ type: "response.output_item.done", output_index: 0, item }));
-        }
-        response.end(
-          event({
-            type: "response.failed",
-            response: {
-              id: `failure-${requests.length}`,
-              status: "failed",
-              error: { code: null, message: "Internal error during token generation" },
-              output: scenario === "fallback" ? [] : [item],
-              usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
-            },
-          }),
+          ].join(""),
         );
-        return;
-      }
-      const message = {
-        type: "message",
-        id: "fallback",
-        role: "assistant",
-        status: "completed",
-        content: [
-          { type: "output_text", text: recovered ? continuation : marker, annotations: [] },
-        ],
-      };
-      response.end(
-        [
-          event({
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { ...message, status: "in_progress", content: [] },
-          }),
-          event({ type: "response.output_item.done", output_index: 0, item: message }),
-          event({
-            type: "response.completed",
-            response: {
-              id: "fallback-response",
-              status: "completed",
-              output: [message],
-              usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-            },
-          }),
-        ].join(""),
-      );
+      })().catch((error: unknown) => response.destroy(error instanceof Error ? error : undefined));
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     try {
@@ -311,7 +315,9 @@ it(
         }
       } finally {
         provider.closeAllConnections();
-        await new Promise<void>((resolve) => provider.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          provider.close(() => resolve());
+        });
         snapshot.restore();
         clearRuntimeConfigSnapshot();
         clearConfigCache();
