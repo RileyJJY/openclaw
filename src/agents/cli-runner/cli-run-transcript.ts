@@ -169,7 +169,7 @@ const CLI_TRANSCRIPT_UNAVAILABLE_USAGE = {
  * Transcript counters account for the whole turn; `contextUsage` stays the latest call's
  * prompt size so context readers never size the window from a multi-call aggregate.
  */
-export function resolveCliTranscriptUsage(
+function resolveCliTranscriptUsage(
   lastCallUsage: CliTranscriptUsage | undefined,
   turnUsage: CliTranscriptUsage | undefined,
 ): CliTranscriptUsage {

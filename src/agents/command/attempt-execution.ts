@@ -64,7 +64,6 @@ import {
 } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
-import { resolveCliTranscriptUsage } from "../cli-runner/cli-run-transcript.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
@@ -143,20 +142,6 @@ function rebaseExecApprovalContinuationPromptRange(params: {
   };
 }
 
-const ACP_TRANSCRIPT_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-} as const;
 function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
@@ -254,84 +239,6 @@ function isClaudeCliProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "claude-cli";
 }
 
-export async function persistAcpTurnTranscript(params: {
-  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
-  body: string;
-  transcriptBody?: string;
-  userInput?: UserTurnInput;
-  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-  assistantIdempotencyKey?: string;
-  expectedSessionId?: string;
-  finalText: string;
-  terminalOutcome: AgentRunTerminalOutcome;
-  sessionId: string;
-  sessionKey: string;
-  sessionFile?: string;
-  sessionEntry: SessionEntry | undefined;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  sessionAgentId: string;
-  threadId?: string | number;
-  sessionCwd: string;
-  config: OpenClawConfig;
-}): Promise<PersistTextTurnTranscriptResult> {
-  const outcome = classifyAgentRunTerminalOutcome(params.terminalOutcome);
-  return await persistTextTurnTranscript({
-    ...params,
-    ...(params.userInput ? { userMessage: buildPersistedUserTurnMessage(params.userInput) } : {}),
-    assistant: {
-      api: "openai-responses",
-      provider: "openclaw",
-      model: "acp-runtime",
-      stopReason: outcome === "success" ? "stop" : outcome === "failure" ? "error" : "aborted",
-    },
-  });
-}
-
-export async function persistCliTurnTranscript(params: {
-  body: string;
-  transcriptBody?: string;
-  userMessage?: PersistedUserTurnMessage;
-  result: EmbeddedAgentRunResult;
-  sessionId: string;
-  sessionKey: string;
-  sessionFile?: string;
-  sessionEntry: SessionEntry | undefined;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  sessionAgentId: string;
-  threadId?: string | number;
-  sessionCwd: string;
-  config: OpenClawConfig;
-  skipUserTurn?: boolean;
-  skipAssistantTurn?: boolean;
-}): Promise<PersistTextTurnTranscriptResult> {
-  const { result, skipUserTurn: requestedSkipUserTurn, ...transcript } = params;
-  const replyText = resolveCliTranscriptReplyText(result);
-  const provider = result.meta.agentMeta?.provider?.trim() ?? "cli";
-  const model = result.meta.agentMeta?.model?.trim() ?? "default";
-  const skipUserTurn = requestedSkipUserTurn === true;
-
-  return await persistTextTurnTranscript({
-    ...transcript,
-    body: skipUserTurn ? "" : transcript.body,
-    transcriptBody: skipUserTurn ? undefined : transcript.transcriptBody,
-    userMessage: skipUserTurn ? undefined : transcript.userMessage,
-    finalText: replyText,
-    assistant: {
-      api: "cli",
-      provider,
-      model,
-      stopReason: "stop",
-      // The marker is terminal for fallback scans: without it, readers could
-      // skip this turn and revive an older cumulative usage record as fresh.
-      usage: resolveCliTranscriptUsage(
-        result.meta.agentMeta?.lastCallUsage,
-        result.meta.agentMeta?.diagnosticUsage,
-      ),
-    },
-  });
-}
 export function runAgentAttempt(params: {
   preparedRunAdmission: PreparedAgentRunAdmission;
   providerOverride: string;

@@ -95,6 +95,7 @@ import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { isRenderablePayload } from "./reply-payloads-base.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
+import { deriveTranscriptOutputTokens } from "./transcript-output-usage.js";
 
 type EmbeddedAgentRuntime = typeof import("../../agents/embedded-agent.js");
 type ToolResultTruncationRuntime =
@@ -362,15 +363,7 @@ function deriveTranscriptUsageSnapshot(
     return undefined;
   }
   const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage });
-  // Counters can cover a whole multi-call turn; the context marker keeps the latest call.
-  const outputRaw =
-    usage.contextUsage?.state === "available"
-      ? usage.contextUsage.totalTokens - usage.contextUsage.promptTokens
-      : usage.output;
-  const outputTokens =
-    typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
-      ? outputRaw
-      : undefined;
+  const outputTokens = deriveTranscriptOutputTokens(usage);
   if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
     return undefined;
   }
