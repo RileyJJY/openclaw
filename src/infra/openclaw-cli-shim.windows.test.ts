@@ -13,7 +13,11 @@ import {
   createSourceCliFixture,
   runSourceCliProbe,
 } from "./openclaw-cli-invocation.test-support.js";
-import { clearGatewayAgentCliShim, prepareGatewayAgentCliShim } from "./openclaw-cli-shim.js";
+import {
+  clearGatewayAgentCliShim,
+  mergeGatewayAgentCliPath,
+  prepareGatewayAgentCliShim,
+} from "./openclaw-cli-shim.js";
 
 const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn(() => "gbk"));
 const resolveWindowsOemCodePageForEncodingMock = vi.hoisted(() => vi.fn(() => 936));
@@ -169,8 +173,14 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
       });
       resolveWindowsOemEncodingMock.mockReturnValue("cp857");
       resolveWindowsOemCodePageForEncodingMock.mockReturnValue(857);
+      const unavailableWarnings: string[] = [];
       try {
-        await prepareGatewayAgentCliShim({ env: {}, invocation: cjkInvocation, stateDir });
+        await prepareGatewayAgentCliShim({
+          env: {},
+          invocation: cjkInvocation,
+          onUnavailable: (error) => unavailableWarnings.push(String(error).slice(0, 512)),
+          stateDir,
+        });
       } finally {
         resolveWindowsOemEncodingMock.mockImplementation(() => "gbk");
         resolveWindowsOemCodePageForEncodingMock.mockImplementation(() => 936);
@@ -189,6 +199,19 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
         afterFailedRegeneration,
         root,
       );
+      const generatedPath = mergeGatewayAgentCliPath();
+      console.info(
+        "[gateway-agent-cli-fallback]",
+        JSON.stringify({
+          phase: "existing-launcher-after-failed-regeneration",
+          commandStatus: afterFailedRegeneration.status,
+          launcherPreserved: preservedLauncher.equals(existingLauncher),
+          generatedPathPresent: generatedPath !== undefined,
+          warningReported: unavailableWarnings.length > 0,
+        }),
+      );
+      expect(generatedPath).toBeUndefined();
+      expect(unavailableWarnings).toHaveLength(1);
       expect(JSON.parse(afterFailedRegeneration.stdout)).toMatchObject({
         source: "gateway",
         args: ["probe"],
