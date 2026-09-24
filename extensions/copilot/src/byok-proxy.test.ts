@@ -1,4 +1,3 @@
-import { request as httpRequest } from "node:http";
 // Copilot BYOK proxy tests verify SDK-local transport is guarded outbound fetch.
 import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -679,7 +678,7 @@ describe("createCopilotByokProxy", () => {
 
     try {
       const status = await new Promise<number>((resolve, reject) => {
-        const client = httpRequest(
+        const client = http.request(
           `${proxy?.provider.provider?.baseUrl}/openai/v1/responses`,
           { method: "POST", headers: { "content-length": "1048576" } },
           (response) => {
