@@ -8,7 +8,6 @@ import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { normalizeStringifiedEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
-import { signalAccountKeyPolicy } from "./account-selection.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -22,17 +21,12 @@ import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 const SIGNAL_CHANNEL = "signal" as const;
 
-async function loadSignalChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
-
 export const signalSetupWizard = createSignalSetupWizardProxy(
-  async () => (await loadSignalChannelRuntime()).signalSetupWizard,
+  async () => (await import("./channel.runtime.js")).signalSetupWizard,
 );
 
 const signalConfigAdapterBase = createScopedChannelConfigAdapter<ResolvedSignalAccount>({
   sectionKey: SIGNAL_CHANNEL,
-  accountKeyPolicy: signalAccountKeyPolicy,
   listAccountIds: (cfg) => listSignalAccountIds(cfg),
   resolveAccount: adaptScopedAccountAccessor((params) => resolveSignalAccount(params)),
   defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),

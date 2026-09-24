@@ -18,7 +18,7 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { resolveAgentEntry } from "./agent-scope-config.js";
+import { resolveAgentEntry, resolveNativeModelPrimary } from "./agent-scope-config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveProviderModelRouteAuthRequirement } from "./provider-model-route-auth.js";
@@ -127,11 +127,11 @@ function resolvePolicyMatch(
 }
 
 function modelEntryMatchKind(params: {
-  entry: Pick<ModelDefinitionConfig, "id">;
+  entryId: string;
   provider: string | undefined;
   modelId: string;
 }): ModelEntryMatchKind {
-  const entryId = params.entry.id.trim();
+  const entryId = params.entryId.trim();
   if (entryId === params.modelId) {
     return "exact";
   }
@@ -173,15 +173,21 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   const callerProvider = normalizeProviderId(params.provider ?? "");
   for (const models of modelMaps) {
     const scopeMatches: AgentModelRuntimePolicyMatch[] = [];
-    for (const [key, entry] of Object.entries(models ?? {})) {
+    if (!models) {
+      continue;
+    }
+    for (const key of Object.keys(models)) {
+      const policy = models[key]?.agentRuntime;
+      if (!policy || !hasRuntimePolicy(policy)) {
+        continue;
+      }
       const matches =
         modelEntryMatchKind({
-          entry: { id: key },
+          entryId: key,
           provider: params.provider,
           modelId: modelId ?? "",
         }) === params.matchKind;
-      const policy = entry?.agentRuntime;
-      if (!matches || !policy || !hasRuntimePolicy(policy)) {
+      if (!matches) {
         continue;
       }
       scopeMatches.push({ provider: parseModelCatalogRef(key)?.provider ?? "", policy });
@@ -206,7 +212,8 @@ function resolveModelConfig(params: {
     return undefined;
   }
   return params.providerConfig.models.find(
-    (entry) => modelEntryMatchKind({ entry, provider: params.provider, modelId }) === "exact",
+    (entry) =>
+      modelEntryMatchKind({ entryId: entry.id, provider: params.provider, modelId }) === "exact",
   );
 }
 
@@ -312,10 +319,9 @@ export function resolveModelRouteIntent(
     return undefined;
   }
   const agentId = resolveAgentRuntimePolicyAgentId(params);
-  const agentEntry = agentId ? resolveAgentEntry(params.config, agentId) : undefined;
-  const primary =
-    resolveAgentModelPrimaryValue(agentEntry?.model) ??
-    resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
+  const primary = agentId
+    ? resolveNativeModelPrimary(params.config, agentId)
+    : resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
   const primarySelection = primary ? splitTrailingAuthProfile(primary) : undefined;
   const primaryRef = params.primaryModel
     ? {

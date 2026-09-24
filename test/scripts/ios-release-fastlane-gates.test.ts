@@ -150,9 +150,9 @@ describe("iOS Fastlane release upload gates", () => {
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
     expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
-    expect(gemfile).toContain('gem "fastlane", "2.238.0"');
+    expect(gemfile).toContain('gem "fastlane", "2.240.1"');
     expect(gemfile).toContain('ruby "3.4.10"');
-    expect(lockfile).toContain("fastlane (2.238.0)");
+    expect(lockfile).toContain("fastlane (2.240.1)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
@@ -164,7 +164,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(iosJob).not.toContain("Install locked Fastlane bundle");
     expect(shardJob).toContain('BUNDLE_DEPLOYMENT: "true"');
     expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
-    expect(shardJob).toContain("ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b");
+    expect(shardJob).toContain("ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4");
     expect(shardJob).toContain('ruby-version: "3.4.10"');
     expect(shardJob).toContain('bundler: "2.6.9"');
     expect(shardJob).toContain("bundler-cache: false");
@@ -598,6 +598,186 @@ end
     ]);
   });
 
+  it.each([
+    {
+      name: "existing access disappears at final readback",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+      disappear: true,
+      error: "not assigned",
+    },
+    {
+      name: "other access appears at final readback",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+      finalBroaden: true,
+      error: "outside",
+    },
+    {
+      name: "automatic access already verified",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+    },
+    { name: "manual access already verified", automatic: false, assigned: ["group-id"], writes: 0 },
+    {
+      name: "automatic flag is not access proof",
+      automatic: true,
+      assigned: [],
+      writes: 0,
+      error: "not assigned",
+    },
+    {
+      name: "unknown automatic flag fails closed",
+      automatic: null,
+      assigned: [],
+      writes: 0,
+      error: "not assigned",
+    },
+    {
+      name: "existing other access blocks mutation",
+      automatic: false,
+      assigned: ["other-id"],
+      writes: 0,
+      error: "outside",
+    },
+    { name: "manual missing access assigns once", automatic: false, assigned: [], writes: 1 },
+    {
+      name: "readback failure propagates",
+      automatic: false,
+      assigned: [],
+      writes: 0,
+      readError: true,
+      error: "read failed",
+    },
+    {
+      name: "assignment failure propagates",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      writeError: true,
+      error: "write failed",
+    },
+    {
+      name: "target changes before assignment",
+      automatic: false,
+      assigned: [],
+      writes: 0,
+      flip: true,
+      error: "must be internal",
+    },
+    {
+      name: "other access appears after assignment",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      broaden: true,
+      error: "outside",
+    },
+    {
+      name: "other automatic access appears after assignment",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      otherAutomatic: true,
+      error: "disable automatic",
+    },
+  ])("reconciles TestFlight access: $name", (scenario) => {
+    const selector = functionDefinition(
+      readFastfile(),
+      "select_ci_testflight_internal_group_by_id!",
+    );
+    const verifier = functionDefinition(
+      readFastfile(),
+      "assign_and_verify_ci_testflight_internal_group!",
+    );
+    const source = `
+require "json"
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+module Spaceship
+  class ConnectAPI
+    module Platform
+      IOS = "IOS"
+    end
+  end
+end
+$scenario = JSON.parse(ARGV.fetch(0))
+$writes = 0
+$reads = 0
+Group = Struct.new(:id, :name, :is_internal_group, :has_access_to_all_builds, :builds) do
+  def fetch_builds
+    raise "read failed" if $scenario["readError"]
+    builds
+  end
+end
+Build = Struct.new(:id, :app_version, :version, :platform) do
+  def add_beta_groups(beta_groups:)
+    $writes += 1
+    raise "write failed" if $scenario["writeError"]
+    raise "duplicate assignment rejected" if beta_groups.any? { |group| group.builds.include?(self) }
+    raise "automatic assignment rejected" if beta_groups.any? { |group| group.has_access_to_all_builds != false }
+    raise "wrong immutable group" unless beta_groups.map(&:id) == ["group-id"]
+    beta_groups.each { |group| group.builds << self }
+    $groups.last.builds << self if $scenario["broaden"]
+    $groups.last.has_access_to_all_builds = true if $scenario["otherAutomatic"]
+  end
+end
+App = Struct.new(:build) do
+  def get_beta_groups
+    $reads += 1
+    $groups.first.is_internal_group = false if $scenario["flip"] && $reads >= 3
+    $groups.first.builds.clear if $scenario["disappear"] && $reads >= 3
+    $groups.last.builds << build if $scenario["finalBroaden"] && $reads >= 3
+    $groups
+  end
+  def get_builds(filter:, includes:)
+    raise "wrong build query" unless filter == { "preReleaseVersion.version" => "2026.9.20", version: "1" } && includes == "preReleaseVersion"
+    [build]
+  end
+end
+def env_present?(value)
+  !value.nil? && !value.strip.empty?
+end
+def resolve_app_store_connect_app(app_identifier:, app_id:)
+  $app
+end
+${selector}
+${functionDefinition(readFastfile(), "resolve_ci_testflight_build!")}
+${functionDefinition(readFastfile(), "ci_testflight_build_group_ids")}
+${verifier}
+build = Build.new("build-id", "2026.9.20", "1", "IOS")
+$groups = [
+  Group.new("group-id", "Internal", true, $scenario["automatic"], []),
+  Group.new("other-id", "Other", true, false, [])
+]
+$groups.each { |group| group.builds << build if $scenario.fetch("assigned").include?(group.id) }
+$app = App.new(build)
+begin
+  result = assign_and_verify_ci_testflight_internal_group!(group_id: "group-id", app_store_version: "2026.9.20", build_number: "1")
+  puts JSON.generate({ group: result.fetch(:group).id, writes: $writes })
+rescue => error
+  puts JSON.generate({ error: error.message, writes: $writes })
+end
+`;
+    const result = spawnSync("ruby", ["-e", source, JSON.stringify(scenario)], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const output = JSON.parse(result.stdout) as { group?: string; error?: string; writes: number };
+    expect(output.writes).toBe(scenario.writes);
+    if (scenario.error) {
+      expect(output.error).toContain(scenario.error);
+    } else {
+      expect(output).toEqual({ group: "group-id", writes: scenario.writes });
+    }
+  });
+
   it("freshly resolves and directly assigns the exact internal group to the uploaded build", () => {
     const selector = functionDefinition(
       readFastfile(),
@@ -647,6 +827,8 @@ def resolve_app_store_connect_app(app_identifier:, app_id:)
   $fresh_app
 end
 ${selector}
+${functionDefinition(readFastfile(), "resolve_ci_testflight_build!")}
+${functionDefinition(readFastfile(), "ci_testflight_build_group_ids")}
 ${verifier}
 
 def run_case(label, post_groups:, app_builds:)
@@ -822,7 +1004,6 @@ end
     expect(screenshots).toContain("build_for_testing: true");
     expect(screenshots).toContain("RELEASE_IOS_SCREENSHOT_TESTS.each");
     expect(screenshots).toContain("capture_release_ios_screenshot!(");
-    expect(capture).toContain("1.upto(2)");
     expect(screenshots).toContain(
       "result_bundle_archive_directory: result_bundle_archive_directory",
     );
@@ -833,13 +1014,7 @@ end
     expect(capture).toContain("result_bundle: true");
     expect(capture).toContain("number_of_retries: 0");
     expect(capture).toContain("stop_after_first_error: true");
-    expect(capture).toContain("retrying once in a fresh simulator session");
     expect(capture).toContain("verify_snapshot_test_result!");
-    expect(capture).toContain('capture_outcome: "failed"');
-    expect(capture).toContain('capture_outcome: "succeeded"');
-    expect(capture.indexOf('capture_outcome: "failed"')).toBeLessThan(
-      capture.indexOf("raise if attempt == 2"),
-    );
     expect(attemptRecorder).toContain('"captureOutcome" => capture_outcome');
     expect(attemptRecorder).toContain("write_release_ios_screenshot_attempts!(");
     expect(attemptWriter).toContain('"schemaVersion" => 1');
@@ -857,6 +1032,91 @@ end
     expect(verifier).toContain('"xcresulttool"');
     expect(verifier).toContain('summary.fetch("failedTests")');
     expect(verifier).toContain("UI.test_failure!");
+  });
+
+  it("preserves the first screenshot failure and records one capture without retrying", () => {
+    const fastfile = readFastfile();
+    const source = `
+require "json"
+require "fileutils"
+require "tmpdir"
+module UI
+  def self.important(*); end
+end
+SNAPSHOT_STATUS_BAR_ARGUMENTS = "fixture"
+IOS_SCREENSHOT_XCARGS = "fixture"
+${[
+  "archive_snapshot_test_result!",
+  "write_release_ios_screenshot_attempts!",
+  "record_release_ios_screenshot_attempt!",
+  "capture_release_ios_screenshot!",
+]
+  .map((name) => functionDefinition(fastfile, name))
+  .join("\n")}
+def capture_ios_screenshots(**options)
+  @calls += 1
+  raise "native retries enabled" unless options.fetch(:number_of_retries) == 0
+  FileUtils.mkdir_p(@result_path)
+  File.write(File.join(@result_path, "result"), "capture #{@calls}")
+  raise "synthetic capture failure" if @scenario == "capture" && @calls == 1
+end
+def verify_snapshot_test_result!(*)
+  @checks += 1
+  raise "synthetic result failure" if @scenario == "result" && @checks == 1
+end
+rows = %w[capture result success].map do |scenario|
+  Dir.mktmpdir("openclaw-capture-") do |root|
+    @scenario, @calls, @checks = scenario, 0, 0
+    @result_path = File.join(root, "current.xcresult")
+    archive = File.join(root, "archive")
+    FileUtils.mkdir_p(archive)
+    ledger = File.join(archive, "capture-attempts.json")
+    error = nil
+    begin
+      capture_release_ios_screenshot!(
+        project: "fixture", device: "fixture-device",
+        screenshot: { test: "fixture-test", name: "fixture-screen" },
+        output_directory: root, result_bundle_path: @result_path,
+        result_bundle_archive_directory: archive, capture_attempts: [],
+        capture_attempts_path: ledger, derived_data_path: root,
+        clear_previous_screenshots: true
+      )
+    rescue => failure
+      error = failure.message
+    end
+    { scenario: scenario, calls: @calls, checks: @checks, error: error,
+      attempts: JSON.parse(File.read(ledger)).fetch("attempts"),
+      archived: File.read(File.join(archive, "fixture-device-fixture-screen-attempt-1.xcresult", "result")) }
+  end
+end
+puts JSON.generate(rows)
+`;
+    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    const rows = JSON.parse(result.stdout) as {
+      scenario: string;
+      calls: number;
+      checks: number;
+      error: string | null;
+      attempts: { attempt: number; captureOutcome: string }[];
+      archived: string;
+    }[];
+    expect(
+      rows.map(({ scenario, calls, checks, error }) => ({ scenario, calls, checks, error })),
+    ).toEqual([
+      { scenario: "capture", calls: 1, checks: 0, error: "synthetic capture failure" },
+      { scenario: "result", calls: 1, checks: 1, error: "synthetic result failure" },
+      { scenario: "success", calls: 1, checks: 1, error: null },
+    ]);
+    for (const row of rows) {
+      expect(row.attempts).toEqual([
+        expect.objectContaining({
+          attempt: 1,
+          captureOutcome: row.scenario === "success" ? "succeeded" : "failed",
+        }),
+      ]);
+      expect(row.archived).toBe("capture 1");
+    }
   });
 
   it("captures each release screen from an independent direct launch", () => {
@@ -1117,7 +1377,7 @@ puts JSON.generate(results)
     const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
 
     expect(workflow).toContain('IOS_SCREENSHOT_NODE_VERSION: "24.16.0"');
-    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"');
+    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
     expect(shardJob).toContain("needs: [preflight]");

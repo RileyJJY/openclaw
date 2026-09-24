@@ -58,6 +58,11 @@ The list shows model inventory. Status explains the configured default, fallback
 and authentication for their routes. It does not inspect a chat session's model
 override; use [`/model status`](/concepts/models#model-in-chat) in that session.
 
+For agents with `runtime.type: "acp"`, status and auth probes inspect the native
+default and native fallback policy. The agent's `model.primary` selects its ACP
+harness and is not a native probe candidate. Use ACP session controls to inspect
+or change the external harness model.
+
 #### Read status correctly
 
 These sections answer different questions:
@@ -141,6 +146,13 @@ or environment, the command reads that Gateway's catalog. `--agent` selects an
 agent on that Gateway. Provider filtering, model visibility and availability use
 the Gateway's captured config and auth facts. The command does not resolve local
 model-provider secrets for that request.
+
+When a provider's saved inventory expires, catalog reads return saved rows while
+the Gateway refreshes that provider in the background. A later read shows newly
+published models. Failed refreshes preserve saved rows; use `--refresh` to retry.
+Chat model menus, the Control UI, and `models list` display the catalog's refresh
+warning. The CLI writes the warning to stderr, keeping JSON and plain stdout
+machine-readable.
 
 A selected Gateway must advertise `published-model-catalog`. If it does not,
 update or restart it and retry. Connection, authorization and capability errors

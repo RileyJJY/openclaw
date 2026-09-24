@@ -856,7 +856,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   });
 
   it.each(["beta", "stable", "full"])(
-    "reuses %s Telegram failures only when the strict verifier accepted their policy",
+    "rejects %s Telegram failures rejected by the canonical verifier",
     (releaseProfile) => {
       const { clone, priorSha } = getSharedRepo();
       const validationInputs = {
@@ -869,6 +869,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
           ["npmTelegram", "releaseChecksIndependent", "releaseChecksCandidate"].includes(child.role)
         ) {
           child.conclusion = "failure";
+          child.policyPassed = false;
           record.conclusions.children[child.role] = "failure";
         }
       }
@@ -885,7 +886,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       });
 
       expect(result.status).toBe(0);
-      expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
+      expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
     },
   );
 
@@ -1363,7 +1364,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
+    expect(parseOutput(result.stdout), result.stderr).toMatchObject({
       changed_path_count: "1",
       changed_paths: '["CHANGELOG.md"]',
       evidence_policy: "changelog-only-release-v1",
@@ -1425,7 +1426,9 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       targetSha,
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(parseOutput(result.stdout).reuse).toBe(delta === "selected" ? "true" : "false");
+    expect(parseOutput(result.stdout).reuse, result.stderr).toBe(
+      delta === "selected" ? "true" : "false",
+    );
     if (delta === "selected") {
       expect(parseOutput(result.stdout)).toMatchObject({
         changed_paths: JSON.stringify(changedPaths),

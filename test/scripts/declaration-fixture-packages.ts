@@ -31,6 +31,7 @@ export function materializeDeclarationPackages(root: string, unified: boolean) {
     for (const dependency of Object.keys({
       ...manifest.dependencies,
       ...manifest.peerDependencies,
+      ...manifest.optionalDependencies,
     })) {
       const compilerPackage = ["typescript", "rolldown-plugin-dts"].includes(dependency);
       // Optional tool peers (e.g. Vue) are not part of this fixture's compiler graph.
@@ -38,7 +39,10 @@ export function materializeDeclarationPackages(root: string, unified: boolean) {
       try {
         dependencySource = locate(dependency, source);
       } catch {
-        if (manifest.peerDependenciesMeta?.[dependency]?.optional) {
+        if (
+          manifest.peerDependenciesMeta?.[dependency]?.optional ||
+          manifest.optionalDependencies?.[dependency]
+        ) {
           continue;
         }
         throw new Error(`Missing fixture dependency ${dependency} from ${name}`);
@@ -58,11 +62,6 @@ export function materializeDeclarationPackages(root: string, unified: boolean) {
     "tsdown",
     ...(unified ? ["@types/node", "apache-arrow"] : []),
   ]) {
-    copy(
-      name,
-      process.cwd(),
-      path.join(root, "node_modules", name),
-      !["typescript", "tsdown"].includes(name),
-    );
+    copy(name, process.cwd(), path.join(root, "node_modules", name), name !== "tsdown");
   }
 }

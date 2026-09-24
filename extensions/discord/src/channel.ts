@@ -1,4 +1,3 @@
-// Discord plugin module implements channel behavior.
 import {
   buildLegacyDmAccountAllowlistAdapter,
   createAccountScopedAllowlistNameResolver,
@@ -60,7 +59,6 @@ import {
   loadDiscordResolveUsersModule,
   loadDiscordSendModule,
   loadDiscordTargetResolverModule,
-  loadDiscordThreadBindingsManagerModule,
   probeDiscordStatusAccount,
 } from "./channel.loaders.js";
 import { openDiscordCommandDeployHashStore } from "./command-deploy-store.js";
@@ -70,12 +68,12 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
-import {
-  setThreadBindingIdleTimeoutBySessionKey,
-  setThreadBindingMaxAgeBySessionKey,
-} from "./monitor/thread-bindings.session-updates.js";
 import { withAbortTimeout } from "./monitor/timeouts.js";
-import { looksLikeDiscordTargetId, normalizeDiscordMessagingTarget } from "./normalize.js";
+import {
+  looksLikeDiscordTargetId,
+  matchesDiscordToolContextTarget,
+  normalizeDiscordMessagingTarget,
+} from "./normalize.js";
 import { discordOutbound } from "./outbound-adapter.js";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
 import type { DiscordProbe } from "./probe.js";
@@ -86,7 +84,7 @@ import { discordSetupContract } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
-import { defaultTopLevelPlacement } from "./thread-binding-api.js";
+import { discordConversationBindings } from "./thread-bindings-channel.js";
 
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
 const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
@@ -216,21 +214,6 @@ const resolveDiscordAllowlistNames = createAccountScopedAllowlistNameResolver({
     (await loadDiscordResolveUsersModule()).resolveDiscordUserAllowlist({ token, entries }),
 });
 
-function toConversationLifecycleBinding(binding: {
-  boundAt: number;
-  lastActivityAt?: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-}) {
-  return {
-    boundAt: binding.boundAt,
-    lastActivityAt:
-      typeof binding.lastActivityAt === "number" ? binding.lastActivityAt : binding.boundAt,
-    idleTimeoutMs: typeof binding.idleTimeoutMs === "number" ? binding.idleTimeoutMs : undefined,
-    maxAgeMs: typeof binding.maxAgeMs === "number" ? binding.maxAgeMs : undefined,
-  };
-}
-
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> =
   createChatChannelPlugin<ResolvedDiscordAccount, DiscordProbe>({
     base: {
@@ -270,22 +253,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         directTargetStyle: "user-prefixed",
         targetIdComparison: "lowercase",
         normalizeTarget: normalizeDiscordMessagingTarget,
-        resolveInboundConversation: ({
-          from,
-          to,
-          conversationId,
-          threadId,
-          threadParentId,
-          isGroup,
-        }) =>
-          resolveDiscordInboundConversation({
-            from,
-            to,
-            conversationId,
-            threadId,
-            threadParentId,
-            isGroup,
-          }),
+        resolveInboundConversation: resolveDiscordInboundConversation,
         normalizeExplicitSessionKey: ({ sessionKey, ctx }) =>
           normalizeExplicitDiscordSessionKey(sessionKey, ctx),
         resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
@@ -301,7 +269,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           }
         },
         buildCrossContextPresentation: buildDiscordCrossContextPresentation,
-        resolveOutboundSessionRoute: (params) => resolveDiscordOutboundSessionRoute(params),
+        resolveOutboundSessionRoute: resolveDiscordOutboundSessionRoute,
         targetResolver: {
           looksLikeId: looksLikeDiscordTargetId,
           hint: "<channelId|user:ID|channel:ID>",
@@ -408,51 +376,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             conversationId,
             parentConversationId,
           }),
-        resolveCommandConversation: ({
-          threadId,
-          threadParentId,
-          parentSessionKey,
-          from,
-          chatType,
-          originatingTo,
-          commandTo,
-          fallbackTo,
-        }) =>
-          resolveDiscordCommandConversation({
-            threadId,
-            threadParentId,
-            parentSessionKey,
-            from,
-            chatType,
-            originatingTo,
-            commandTo,
-            fallbackTo,
-          }),
+        resolveCommandConversation: resolveDiscordCommandConversation,
       },
-      conversationBindings: {
-        supportsCurrentConversationBinding: true,
-        bindingStore: "adapter",
-        defaultTopLevelPlacement,
-        createManager: async ({ cfg, accountId }) =>
-          (await loadDiscordThreadBindingsManagerModule()).createThreadBindingManager({
-            cfg,
-            accountId: accountId ?? undefined,
-            persist: false,
-            enableSweeper: false,
-          }),
-        setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
-          setThreadBindingIdleTimeoutBySessionKey({
-            targetSessionKey,
-            accountId: accountId ?? undefined,
-            idleTimeoutMs,
-          }).map(toConversationLifecycleBinding),
-        setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
-          setThreadBindingMaxAgeBySessionKey({
-            targetSessionKey,
-            accountId: accountId ?? undefined,
-            maxAgeMs,
-          }).map(toConversationLifecycleBinding),
-      },
+      conversationBindings: discordConversationBindings,
       heartbeat: {
         sendTyping: async ({ cfg, to, accountId, threadId }) => {
           const resolvedTo = resolveDiscordAttachedOutboundTarget({ to, threadId });
@@ -723,6 +649,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
     },
     security: discordSecurityAdapter,
     threading: {
+      matchesToolContextTarget: matchesDiscordToolContextTarget,
       scopedAccountReplyToMode: {
         resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
         resolveReplyToMode: (account) => account.config.replyToMode,
@@ -730,6 +657,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       buildToolContext: ({ context, hasRepliedRef }) => {
         const currentMessagingTarget = normalizeOptionalString(context.To);
+        const nativeChannelId = normalizeOptionalString(context.NativeChannelId);
         const currentChatType =
           context.ChatType === "direct" ||
           context.ChatType === "group" ||
@@ -737,8 +665,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             ? context.ChatType
             : undefined;
         return {
-          currentChannelId:
-            normalizeOptionalString(context.NativeChannelId) ?? currentMessagingTarget,
+          currentChannelId: nativeChannelId
+            ? normalizeDiscordMessagingTarget(nativeChannelId)
+            : currentMessagingTarget,
           currentChatType,
           currentMessagingTarget,
           currentMessageId: context.CurrentMessageId,
@@ -750,13 +679,6 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       ...discordOutbound,
       preferFinalAssistantVisibleText: true,
       shouldTreatDeliveredTextAsVisible: shouldTreatDiscordDeliveredTextAsVisible,
-      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
-        shouldSuppressLocalDiscordExecApprovalPrompt({
-          cfg,
-          accountId,
-          payload,
-          hint,
-        }),
+      shouldSuppressLocalPayloadPrompt: shouldSuppressLocalDiscordExecApprovalPrompt,
     },
   });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

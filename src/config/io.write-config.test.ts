@@ -22,6 +22,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -44,6 +45,12 @@ import {
   type ConfigWriteOptions,
 } from "./io.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
+import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
+import {
+  createConfigWriteHomeFixture,
+  defaultedDemoPluginRegistry,
+} from "./io.write-config.test-support.js";
+import { registerConfigWritePreflightTests } from "./io.write-preflight.test-support.js";
 import { replaceConfigFile, transformConfigFile, transformConfigFileWithRetry } from "./mutate.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
@@ -64,13 +71,23 @@ const mockLoadPluginManifestRegistry = vi.hoisted(() =>
     plugins: [],
   })),
 );
-const mockMaintainConfigBackups = vi.hoisted(() =>
-  vi.fn<typeof import("./backup-rotation.js").maintainConfigBackups>(async () => {}),
+const mockPrepareConfigFileWrite = vi.hoisted(() =>
+  vi.fn<typeof import("./backup-rotation.js").prepareConfigFileWrite>(),
 );
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: mockLoadPluginManifestRegistry,
 }));
+
+vi.mock("../plugins/discovery.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/discovery.js")>();
+  const discovery = { candidates: [], diagnostics: [] };
+  return {
+    ...actual,
+    // The registry above owns this suite's synthetic plugin inventory.
+    discoverOpenClawPlugins: () => discovery,
+  };
+});
 
 vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/plugin-registry.js")>();
@@ -91,9 +108,10 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
 
 vi.mock("./backup-rotation.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./backup-rotation.js")>();
+  mockPrepareConfigFileWrite.mockImplementation(actual.prepareConfigFileWrite);
   return {
     ...actual,
-    maintainConfigBackups: mockMaintainConfigBackups,
+    prepareConfigFileWrite: mockPrepareConfigFileWrite,
   };
 });
 
@@ -102,7 +120,7 @@ type ConfigIoOptions = Parameters<typeof createObservedConfigIO>[0];
 function createConfigIO(options: ConfigIoOptions = {}) {
   const env = options.env ?? ({} as NodeJS.ProcessEnv);
   if (!("NODE_ENV" in env)) {
-    // Route real SQLite state through Vitest's worker DB without adding a key to config env snapshots.
+    // Mark injected environments as tests without adding a key to config env snapshots.
     Object.defineProperty(env, "NODE_ENV", { configurable: true, value: "test" });
   }
   return createObservedConfigIO({
@@ -114,51 +132,19 @@ function createConfigIO(options: ConfigIoOptions = {}) {
 
 describe("config io write", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-io-" });
+  const workers = createConfigIoWorkerFixture();
   const silentLogger = {
     warn: () => {},
     error: () => {},
   };
-  const defaultedDemoPluginRegistry = {
-    diagnostics: [],
-    plugins: [
-      {
-        id: "demo",
-        origin: "bundled",
-        enabledByDefault: true,
-        channels: [],
-        providers: [],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
-        rootDir: "/tmp/openclaw-test-demo",
-        source: "/tmp/openclaw-test-demo/index.ts",
-        manifestPath: "/tmp/openclaw-test-demo/openclaw.plugin.json",
-        configSchema: {
-          type: "object",
-          properties: { mode: { type: "string", default: "auto" } },
-          additionalProperties: true,
-        },
-      },
-    ],
-  } satisfies PluginManifestRegistry;
-
-  async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-    const home = await suiteRootTracker.make("case");
-    return withEnvAsync(
-      {
-        OPENCLAW_DEFER_SHELL_ENV_FALLBACK: undefined,
-        OPENCLAW_LOAD_SHELL_ENV: undefined,
-        OPENCLAW_SHELL_ENV_TIMEOUT_MS: undefined,
-      },
-      () => fn(home),
-    );
-  }
+  const withSuiteHome = createConfigWriteHomeFixture(suiteRootTracker.make);
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
     vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
       await suiteRootTracker.make("coordinator"),
     );
+    await workers.setup(await suiteRootTracker.make("workers"));
 
     // Default: return an empty plugin list so existing tests that don't need
     // plugin-owned channel schemas keep working unchanged.
@@ -168,13 +154,17 @@ describe("config io write", () => {
     } satisfies PluginManifestRegistry);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetConfigRuntimeState();
-    mockMaintainConfigBackups.mockReset();
-    mockMaintainConfigBackups.mockResolvedValue(undefined);
+    mockPrepareConfigFileWrite.mockReset();
+    const actual =
+      await vi.importActual<typeof import("./backup-rotation.js")>("./backup-rotation.js");
+    mockPrepareConfigFileWrite.mockImplementation(actual.prepareConfigFileWrite);
   });
 
   afterAll(async () => {
+    await workers.close();
     closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
     vi.mocked(tmpDirOwner.resolvePreferredOpenClawTmpDir).mockRestore();
@@ -1822,7 +1812,7 @@ describe("config io write", () => {
         ),
       ).rejects.toThrow("config changed since last load");
 
-      expect(mockMaintainConfigBackups).not.toHaveBeenCalled();
+      expect(mockPrepareConfigFileWrite).not.toHaveBeenCalled();
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRaw);
     },
   );
@@ -1834,8 +1824,12 @@ describe("config io write", () => {
     const io = createFastConfigIO(home);
     const snapshot = await io.readConfigFileSnapshot();
     const concurrentRaw = formatConfig({ gateway: { mode: "local", port: 19001 } });
-    mockMaintainConfigBackups.mockImplementationOnce(async () => {
-      await fs.writeFile(configPath, concurrentRaw, "utf-8");
+    mockPrepareConfigFileWrite.mockImplementationOnce(async (params) => {
+      const actual =
+        await vi.importActual<typeof import("./backup-rotation.js")>("./backup-rotation.js");
+      const prepared = await actual.prepareConfigFileWrite(params);
+      fsNode.writeFileSync(configPath, concurrentRaw, "utf-8");
+      return prepared;
     });
 
     await expect(
@@ -2565,7 +2559,7 @@ describe("config io write", () => {
             },
             meta: {
               lastTouchedVersion: persisted.meta?.lastTouchedVersion,
-              migrations: { modelPolicyAllowlist: true },
+              migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
             },
           });
           expect(typeof persisted.meta?.lastTouchedVersion).toBe("string");
@@ -2647,54 +2641,6 @@ describe("config io write", () => {
       } finally {
         unsubscribe();
       }
-    },
-  );
-
-  itWithHome(
-    "preserves auth-store refresh scope through managed preflight and notification",
-    async (home) => {
-      const configPath = configPathForHome(home);
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      const initialConfig = {
-        gateway: { mode: "local" as const },
-        logging: { level: "info" as const },
-      } satisfies OpenClawConfig;
-      await writeConfigJson(configPath, initialConfig);
-      const preflight = vi.fn(
-        async (
-          sourceConfig: OpenClawConfig,
-          refreshOptions?: { includeAuthStoreRefs?: boolean },
-        ) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-          refreshOptions,
-        }),
-      );
-      const notifications: Array<{ includeAuthStoreRefs?: boolean } | undefined> = [];
-      const unsubscribe = registerConfigWriteListener(
-        (event) => notifications.push(event.runtimeRefresh),
-        {
-          ownsRuntimeActivationFor: configPath,
-          preCommitRuntimePreflight: preflight,
-        },
-      );
-
-      try {
-        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
-          setRuntimeConfigSnapshot(initialConfig, initialConfig);
-          await writeConfigFile(
-            { ...initialConfig, logging: { level: "debug" } },
-            { runtimeRefresh: { includeAuthStoreRefs: false } },
-          );
-        });
-      } finally {
-        unsubscribe();
-      }
-
-      expect(preflight).toHaveBeenCalledWith(expect.any(Object), {
-        includeAuthStoreRefs: false,
-      });
-      expect(notifications).toEqual([{ includeAuthStoreRefs: false }]);
     },
   );
 
@@ -3687,7 +3633,7 @@ describe("config io write", () => {
 
           await expect(
             writeConfigFile({ gateway: { mode: "local", port: 19001 } }),
-          ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
+          ).rejects.toThrow(/config changed since last load/);
 
           await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRaw);
         });
@@ -3697,119 +3643,13 @@ describe("config io write", () => {
     },
   );
 
-  itWithHome("blocks runtime preflight failures before committing root writes", async (home) => {
-    const configPath = configPathForHome(home);
-    const initialRaw = formatConfig({ gateway: { mode: "local" } });
-    let observedSource: OpenClawConfig | undefined;
-
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, initialRaw, "utf-8");
-
-    try {
-      await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
-        setRuntimeConfigSnapshotRefreshHandler({
-          preflight: async ({ sourceConfig }) => {
-            observedSource = sourceConfig;
-            throw new Error("missing included secret");
-          },
-          refresh: () => true,
-        });
-
-        await expect(
-          writeConfigFile({
-            gateway: { mode: "local", port: 19001 },
-            logging: { level: "debug" },
-          }),
-        ).rejects.toThrow(/active SecretRef resolution failed: missing included secret/);
-
-        expect(observedSource?.gateway?.port).toBe(19001);
-        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
-      });
-    } finally {
-      setRuntimeConfigSnapshotRefreshHandler(null);
-    }
+  registerConfigWritePreflightTests({
+    itWithHome,
+    configPathForHome,
+    formatConfig,
+    createConfigIO,
+    silentLogger,
   });
-
-  itWithHome(
-    "runs a caller commit guard after runtime preflight and before the root write",
-    async (home) => {
-      const configPath = configPathForHome(home);
-      const initialRaw = formatConfig({ gateway: { mode: "local" } });
-      const events: string[] = [];
-
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, initialRaw, "utf-8");
-
-      try {
-        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
-          setRuntimeConfigSnapshotRefreshHandler({
-            preflight: () => {
-              events.push("runtime");
-            },
-            refresh: () => true,
-          });
-
-          await expect(
-            writeConfigFile(
-              { gateway: { mode: "local", port: 19001 } },
-              {
-                preCommitRuntimePreflight: async (sourceConfig) => {
-                  events.push(`caller:${String(sourceConfig.gateway?.port)}`);
-                  await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
-                  throw new Error("authority changed");
-                },
-              },
-            ),
-          ).rejects.toThrow("authority changed");
-
-          expect(events).toEqual(["runtime", "caller:19001"]);
-          await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
-        });
-      } finally {
-        setRuntimeConfigSnapshotRefreshHandler(null);
-      }
-    },
-  );
-
-  itWithHome(
-    "blocks runtime preflight failures before direct config IO commits root writes",
-    async (home) => {
-      const configPath = configPathForHome(home);
-      const initialRaw = formatConfig({ gateway: { mode: "local" } });
-      const env = {
-        ...process.env,
-        OPENCLAW_CONFIG_PATH: configPath,
-      } as NodeJS.ProcessEnv;
-      let observedSource: OpenClawConfig | undefined;
-      const beforeCommit = vi.fn();
-
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, initialRaw, "utf-8");
-
-      try {
-        setRuntimeConfigSnapshotRefreshHandler({
-          preflight: async ({ sourceConfig }) => {
-            observedSource = sourceConfig;
-            throw new Error("missing direct IO secret");
-          },
-          refresh: () => true,
-        });
-
-        await expect(
-          createConfigIO({ env, logger: silentLogger }).writeConfigFile(
-            { gateway: { mode: "local", port: 19001 } },
-            { beforeCommit },
-          ),
-        ).rejects.toThrow(/active SecretRef resolution failed: missing direct IO secret/);
-
-        expect(observedSource?.gateway?.port).toBe(19001);
-        expect(beforeCommit).not.toHaveBeenCalled();
-        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
-      } finally {
-        setRuntimeConfigSnapshotRefreshHandler(null);
-      }
-    },
-  );
 
   for (const writer of ["direct", "runtime"] as const) {
     itWithHome(`rechecks ${writer} publication authority after backup work`, async (home) => {
@@ -3824,10 +3664,13 @@ describe("config io write", () => {
         },
         refresh: () => true,
       });
-      mockMaintainConfigBackups.mockImplementationOnce(async () => {
-        await Promise.resolve();
+      mockPrepareConfigFileWrite.mockImplementationOnce(async (params) => {
+        const actual =
+          await vi.importActual<typeof import("./backup-rotation.js")>("./backup-rotation.js");
+        const prepared = await actual.prepareConfigFileWrite(params);
         events.push("backup");
         active = false;
+        return prepared;
       });
       await withEnvAsync(
         { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_TEST_FAST: "1" },
@@ -3842,6 +3685,8 @@ describe("config io write", () => {
               {
                 beforeCommit: async () => {
                   events.push("commit");
+                },
+                assertCurrent: () => {
                   if (!active) {
                     throw new Error("approval expired");
                   }
@@ -3856,7 +3701,52 @@ describe("config io write", () => {
     });
   }
 
-  for (const publication of [
+  itWithHome(
+    "rejects changed includes before copy fallback creates a missing root",
+    async (home) => {
+      const configPath = configPathForHome(home);
+      const includePath = path.join(path.dirname(configPath), "included.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await writeConfigJson(includePath, { logging: { level: "info" } });
+      let renameDenied = false;
+      let includeChanged = false;
+      const io = createFastConfigIO(home, {
+        configPath,
+        fs: {
+          ...fsNode,
+          renameSync: (source, destination) => {
+            if (destination !== configPath) {
+              return fsNode.renameSync(source, destination);
+            }
+            renameDenied = true;
+            throw Object.assign(new Error("rename denied"), { code: "EPERM" });
+          },
+          readSync: new Proxy(fsNode.readSync, {
+            apply(target, thisArg, args) {
+              if (renameDenied && !includeChanged) {
+                fsNode.writeFileSync(includePath, JSON.stringify({ logging: { level: "debug" } }));
+                includeChanged = true;
+              }
+              return Reflect.apply(target, thisArg, args);
+            },
+          }),
+        },
+      });
+      const nextConfig = {
+        $include: "included.json",
+        gateway: { mode: "local" as const },
+      };
+
+      await expect(io.writeConfigFile(nextConfig)).rejects.toThrow("included config");
+
+      expect(renameDenied).toBe(true);
+      expect(includeChanged).toBe(true);
+      await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readPersistedConfig(includePath)).toEqual({ logging: { level: "debug" } });
+    },
+  );
+
+  const copyFallbackPublications = [
     "ordinary",
     "prepared-direct",
     "prepared-runtime",
@@ -3864,24 +3754,31 @@ describe("config io write", () => {
     "guarded",
     "executor-explicit",
     "executor-ambient",
-  ] as const) {
-    const guarded = publication === "guarded" || publication.startsWith("executor-");
+  ] as const;
+  for (const { publication, layout } of copyFallbackPublications.flatMap((publicationKind) =>
+    (["plain", "include"] as const).map((configLayout) => ({
+      publication: publicationKind,
+      layout: configLayout,
+    })),
+  )) {
     itWithHome(
-      `${guarded ? "rejects" : "preserves"} copy fallback for ${publication} publication`,
+      `preserves copy fallback for ${publication} publication with ${layout} config`,
       async (home) => {
-        const { configPath, raw } = await writeConfigFixture(home, {
+        const { configPath } = await writeConfigFixture(home, {
           gateway: { mode: "local", port: 18789 },
+          ...(layout === "include" ? { logging: { $include: "logging.json" } } : {}),
         });
+        const includePath = path.join(path.dirname(configPath), "logging.json");
+        if (layout === "include") {
+          await writeConfigJson(includePath, { level: "info" });
+        }
         const denied = Object.assign(new Error("rename denied"), { code: "EPERM" });
         const io = createFastConfigIO(home, {
           configPath,
           fs: {
             ...fsNode,
-            promises: {
-              ...fsNode.promises,
-              rename: async () => {
-                throw denied;
-              },
+            renameSync: () => {
+              throw denied;
             },
           },
         });
@@ -3899,7 +3796,10 @@ describe("config io write", () => {
             skipPluginValidation: true,
             skipRuntimeSnapshotRefresh: true,
           };
-          const nextConfig = { gateway: { mode: "local" as const, port: 19001 } };
+          const nextConfig = {
+            gateway: { mode: "local" as const, port: 19001 },
+            ...(layout === "include" ? { logging: { level: "info" as const } } : {}),
+          };
           const write =
             publication === "prepared-runtime"
               ? writeConfigFile(nextConfig, options)
@@ -3910,28 +3810,26 @@ describe("config io write", () => {
                     writeOptions: options,
                   })
                 : io.writeConfigFile(nextConfig, options);
-          if (guarded) {
-            await expect(write).rejects.toBe(denied);
-            expect(await fs.readFile(configPath, "utf8")).toBe(raw);
-          } else {
-            await write;
-            expect(await readPersistedConfig(configPath)).toMatchObject({
-              gateway: { port: 19001 },
-            });
-            expect(
-              listConfigAuditRecordsForTests({ env: io.env, homedir: () => home }),
-            ).toContainEqual(
-              expect.objectContaining({
-                event: "config.write",
-                configPath,
-                result: "copy-fallback",
-              }),
-            );
-          }
+          await write;
+          expect(await readPersistedConfig(configPath)).toMatchObject({
+            gateway: { port: 19001 },
+            ...(layout === "include" ? { logging: { $include: "logging.json" } } : {}),
+          });
+          expect(
+            listConfigAuditRecordsForTests({ env: io.env, homedir: () => home }),
+          ).toContainEqual(
+            expect.objectContaining({
+              event: "config.write",
+              configPath,
+              result: "copy-fallback",
+            }),
+          );
         };
         const rename =
           publication === "prepared-runtime" || publication === "prepared-mutation"
-            ? vi.spyOn(fsNode.promises, "rename").mockRejectedValue(denied)
+            ? vi.spyOn(fsNode, "renameSync").mockImplementation(() => {
+                throw denied;
+              })
             : undefined;
         try {
           await withEnvAsync(
@@ -3980,6 +3878,9 @@ describe("config io write", () => {
         } else {
           expect(beforeCommit).not.toHaveBeenCalled();
         }
+        if (layout === "include") {
+          expect(await readPersistedConfig(includePath)).toEqual({ level: "info" });
+        }
       },
     );
   }
@@ -4010,13 +3911,13 @@ describe("config io write", () => {
             configPath,
             fs: {
               ...fsNode,
-              promises: {
-                ...fsNode.promises,
-                rename: async () => {
-                  releaseUpdateCommandPreflightForHandoff(fence);
-                  revoked = true;
-                  throw primaryError;
-                },
+              renameSync: (source, destination) => {
+                if (destination !== configPath) {
+                  return fsNode.renameSync(source, destination);
+                }
+                releaseUpdateCommandPreflightForHandoff(fence);
+                revoked = true;
+                throw primaryError;
               },
             },
           });
@@ -4039,7 +3940,9 @@ describe("config io write", () => {
           if (!(failure instanceof AggregateError)) {
             throw new Error("expected the write and authority failures");
           }
-          expect(failure.message).toBe("Config write failed after source ownership changed");
+          expect(failure.message).toBe(
+            "Config write failed after source ownership changed: rename failed before publication",
+          );
           expect(failure.errors).toHaveLength(2);
           expect(failure.errors[0]).toBe(primaryError);
           expect(failure.errors[1]).toHaveProperty(
@@ -4210,20 +4113,18 @@ describe("config io write", () => {
         OPENCLAW_TEST_FAST: "1",
       } as NodeJS.ProcessEnv;
       const readFile = fsNode.promises.readFile.bind(fsNode.promises);
-      const rename = fsNode.promises.rename.bind(fsNode.promises);
+      const rename = fsNode.renameSync;
       let committed = false;
       let rollbackReadUsedInjectedFs = false;
       const injectedFs = {
         ...fsNode,
-        promises: {
-          ...fsNode.promises,
-          rename: async (from, to) => {
-            await rename(from, to);
-            if (!committed && to === configPath) {
-              committed = true;
-              env.OPENCLAW_CONFIG_PATH = otherConfigPath;
-            }
-          },
+        promises: { ...fsNode.promises },
+        renameSync: (from, to) => {
+          rename(from, to);
+          if (!committed && to === configPath) {
+            committed = true;
+            env.OPENCLAW_CONFIG_PATH = otherConfigPath;
+          }
         },
       } satisfies typeof fsNode;
       vi.spyOn(injectedFs.promises, "readFile").mockImplementation(async (target, options) => {

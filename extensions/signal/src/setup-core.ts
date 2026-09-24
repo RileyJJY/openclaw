@@ -27,11 +27,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  resolveSignalAccountEntry,
-  resolveSignalAccountKey,
-  signalAccountKeyPolicy,
-} from "./account-selection.js";
+import { resolveSignalAccountEntry, resolveSignalAccountKey } from "./account-selection.js";
 import type { SignalTransportConfig } from "./account-types.js";
 import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
 import {
@@ -287,8 +283,7 @@ export function createSignalCliPathTextInput(
   return createCliPathTextInput({
     inputKey: "cliPath",
     message: "signal-cli path",
-    resolvePath: ({ cfg, accountId, credentialValues }) =>
-      resolveSignalCliPath({ cfg, accountId, credentialValues }),
+    resolvePath: resolveSignalCliPath,
     shouldPrompt,
   });
 }
@@ -317,7 +312,6 @@ export const signalCompletionNote = {
 
 const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput>({
   channelKey: channel,
-  accountKeyPolicy: signalAccountKeyPolicy,
   validateInput: createSetupInputPresenceValidator<SignalSetupInput>({
     validate: ({ cfg, accountId, input }) => {
       if (

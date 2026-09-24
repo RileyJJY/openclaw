@@ -42,6 +42,7 @@ describe("plugin service reload", () => {
         pluginId: "exporter",
         origin: "workspace",
         source: "test",
+        id: "exporter",
         service: {
           id: "exporter",
           start(ctx) {
@@ -57,6 +58,7 @@ describe("plugin service reload", () => {
         pluginId: "sibling",
         origin: "workspace",
         source: "test",
+        id: "sibling",
         service: {
           id: "sibling",
           start(ctx) {
@@ -100,13 +102,7 @@ describe("plugin service reload", () => {
       entered.resolve();
       return release.promise;
     });
-    const registry = createEmptyPluginRegistry();
-    registry.services.push({
-      pluginId: "exporter",
-      origin: "workspace",
-      source: "test",
-      service: { id: "exporter", start, stop },
-    });
+    const registry = createRegistry([{ id: "exporter", start, stop }], "exporter");
     const handle = await startPluginServices({
       registry,
       config: configFor("https://first.example"),
@@ -140,6 +136,7 @@ describe("plugin service reload", () => {
           pluginId: "exporter",
           origin: "workspace",
           source: "test",
+          id: "exporter",
           service: {
             id: "exporter",
             start() {
@@ -158,6 +155,7 @@ describe("plugin service reload", () => {
           pluginId: "sibling",
           origin: "workspace",
           source: "test",
+          id: "sibling",
           service: { id: "sibling", start() {}, stop: siblingStop },
         },
       );
@@ -189,6 +187,7 @@ describe("plugin service reload", () => {
           pluginId: id,
           origin: "workspace",
           source: "test",
+          id: id.trim(),
           service: {
             id,
             start: (ctx) => {
@@ -245,19 +244,18 @@ describe("plugin service reload", () => {
   it("applies each queued service reload to the current service instance", async () => {
     const configs: OpenClawConfig[] = [];
     const stop = vi.fn();
-    const registry = createEmptyPluginRegistry();
-    registry.services.push({
-      pluginId: "exporter",
-      source: "test",
-      origin: "workspace",
-      service: {
-        id: "exporter",
-        start: (ctx) => {
-          configs.push(ctx.config);
+    const registry = createRegistry(
+      [
+        {
+          id: "exporter",
+          start: (ctx) => {
+            configs.push(ctx.config);
+          },
+          stop,
         },
-        stop,
-      },
-    });
+      ],
+      "exporter",
+    );
     const initial = configFor("https://initial.example");
     const first = configFor("https://first.example");
     const second = configFor("https://second.example");
@@ -276,13 +274,7 @@ describe("plugin service reload", () => {
     const stop = vi.fn(() => {
       throw new Error("cleanup refused");
     });
-    const registry = createEmptyPluginRegistry();
-    registry.services.push({
-      pluginId: "exporter",
-      origin: "workspace",
-      source: "test",
-      service: { id: "exporter", start, stop },
-    });
+    const registry = createRegistry([{ id: "exporter", start, stop }], "exporter");
     const handle = await startPluginServices({ registry, config: {} });
     handles.add(handle);
     await expect(handle.reload({}, new Set(["exporter"]))).rejects.toThrow();
@@ -305,13 +297,9 @@ describe("plugin service reload", () => {
         process.off(event, listener);
       });
       const queuedStart = vi.fn();
-      const registry = createEmptyPluginRegistry();
-      registry.services.push(
-        {
-          pluginId: "candidate",
-          origin: "workspace",
-          source: "test",
-          service: {
+      const registry = createRegistry(
+        [
+          {
             id: "held",
             start: async (context) => {
               contexts.push(context);
@@ -326,13 +314,9 @@ describe("plugin service reload", () => {
             },
             stop,
           },
-        },
-        {
-          pluginId: "candidate",
-          origin: "workspace",
-          source: "test",
-          service: { id: "queued", start: queuedStart },
-        },
+          { id: "queued", start: queuedStart },
+        ],
+        "candidate",
       );
       const startupTrace = createGatewayStartupTrace(createSubsystemLogger("test/service-startup"));
       const broadcastPluginEvent = vi.fn();
@@ -438,6 +422,7 @@ describe("plugin service reload", () => {
       pluginId: record.id,
       origin: "workspace",
       source: "test",
+      id: "late-start",
       service: instance.wrap({
         id: "late-start",
         async start() {
@@ -504,16 +489,7 @@ describe("plugin service reload", () => {
         }),
       };
       const sibling = { id: "sibling", start: vi.fn(), stop: vi.fn() };
-      const registry = createEmptyPluginRegistry();
-      for (const entry of [service, sibling]) {
-        registry.services.push({
-          pluginId: "plugin:test",
-          service: entry,
-          source: "test",
-          origin: "workspace",
-          rootDir: "/plugins/test-plugin",
-        });
-      }
+      const registry = createRegistry([service, sibling]);
       const initialConfig: OpenClawConfig = {};
       const reloadConfig: OpenClawConfig = {};
       const successorConfig: OpenClawConfig = {};
