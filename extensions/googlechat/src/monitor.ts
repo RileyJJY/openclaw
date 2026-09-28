@@ -11,6 +11,7 @@ import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gate
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -95,8 +96,7 @@ async function processGoogleChatEvent(
   if (eventType !== "MESSAGE") {
     return;
   }
-  const { account, runtime, core, statusSink, mediaMaxMb } = target;
-  const config = core.config.current() as OpenClawConfig;
+  const { account, config, runtime, core, statusSink, mediaMaxMb } = target;
   const space = event.space;
   const message = event.message;
   if (!space || !message) {
@@ -449,6 +449,7 @@ export async function startGoogleChatMonitor(
     log: options.runtime.log,
   });
 
+  const readConfig = createRuntimeConfigReader(options.config);
   const ingress = createGoogleChatIngressMonitor({
     accountId: options.account.accountId,
     runtime: options.runtime,
@@ -459,7 +460,9 @@ export async function startGoogleChatMonitor(
   });
   const target: WebhookTarget = {
     account: options.account,
-    config: options.config,
+    get config() {
+      return readConfig();
+    },
     runtime: options.runtime,
     core,
     path: webhookPath,

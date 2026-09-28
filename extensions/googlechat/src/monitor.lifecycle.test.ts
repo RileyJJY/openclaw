@@ -1,10 +1,15 @@
 // Google Chat tests cover monitor lifecycle status publication.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebhookTarget } from "./monitor-types.js";
 
 const mocks = vi.hoisted(() => ({
   ingressStart: vi.fn(),
   ingressStop: vi.fn(async () => undefined),
-  registerTarget: vi.fn(() => vi.fn()),
+  registerTarget: vi.fn((_target: WebhookTarget) => vi.fn()),
   setProcessor: vi.fn(),
 }));
 
@@ -42,6 +47,36 @@ describe("Google Chat monitor lifecycle", () => {
     vi.clearAllMocks();
     mocks.registerTarget.mockReturnValue(vi.fn());
   });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
+  it.each([true, false])(
+    "follows runtime reloads only for a runtime-owned monitor (runtimeOwned=%s)",
+    async (runtimeOwned) => {
+      const startup = { messages: { visibleReplies: "message_tool" as const } };
+      setRuntimeConfigSnapshot(runtimeOwned ? startup : {});
+      const stop = await startGoogleChatMonitor({
+        account: configuredAccount,
+        config: startup,
+        runtime: {},
+        abortSignal: new AbortController().signal,
+      } as never);
+      try {
+        const target = mocks.registerTarget.mock.calls[0]![0];
+        expect(target.config.messages?.visibleReplies).toBe("message_tool");
+        setRuntimeConfigSnapshot({ messages: { visibleReplies: "automatic" } });
+        expect(target.config.messages?.visibleReplies).toBe(
+          runtimeOwned ? "automatic" : "message_tool",
+        );
+        expect(target.audience).toBe("1234567890");
+        expect(mocks.ingressStart).toHaveBeenCalledOnce();
+      } finally {
+        await stop();
+      }
+    },
+  );
 
   it.each([
     { audienceType: "app-url", audience: "https://chat.example.test/googlechat" },
