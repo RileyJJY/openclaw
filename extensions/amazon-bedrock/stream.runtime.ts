@@ -72,6 +72,7 @@ import {
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  coerceTransportToolCallArguments,
   describeToolResultMediaPlaceholder,
   failTransportStream,
   finalizeTerminalToolCallArguments,
@@ -1053,7 +1054,11 @@ function convertMessages(
               break;
             case "toolCall":
               contentBlocks.push({
-                toolUse: { toolUseId: c.id, name: c.name, input: c.arguments as DocumentType },
+                toolUse: {
+                  toolUseId: c.id,
+                  name: c.name,
+                  input: coerceTransportToolCallArguments(c.arguments) as DocumentType,
+                },
               });
               break;
             case "thinking": {
