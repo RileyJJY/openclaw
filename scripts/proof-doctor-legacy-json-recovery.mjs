@@ -9,24 +9,6 @@ const rawOnly = process.argv.includes("--raw");
 const recoveryLimit = 64 * 1024 * 1024;
 const docsPath = path.join(repoRoot, "docs/plugins/sdk-migration/compatibility-policy.md");
 
-const activeFilter = `
-  {sessions: (
-    (.sessions // {})
-    | if type == "object" then
-        [to_entries[]
-         | select((.key | type) == "string" and (.key | length) > 0)
-         | select((.value | type) == "object" and .value.disabled == true)
-         | {key: .key, value: {
-             sessionKey: .key,
-             disabled: true,
-             updatedAt: (if (.value.updatedAt | type) == "number" and (.value.updatedAt | isfinite)
-                         then .value.updatedAt else (now * 1000 | floor) end)
-           }}]
-        | from_entries
-      else {} end
-  )}
-`;
-
 const deviceFilter = `
   {subscribers: (
     (.subscribers // [])
@@ -53,9 +35,7 @@ const deviceFilter = `
   )}
 `;
 
-// The proof executes the filters extracted from the checked-in runbook below.
-// Keep these fixtures available for parity checks when the runbook changes.
-void activeFilter;
+// The proof executes the filter extracted from the checked-in runbook below.
 void deviceFilter;
 
 function assert(condition, message) {
@@ -81,37 +61,25 @@ async function extractRecoveryBlocks() {
   const blocks = [...recoverySection.matchAll(/```sh\r?\n([\s\S]*?)\r?\n```/g)].map(
     (match) => match[1],
   );
-  assert(blocks.length >= 2, "could not extract both documented recovery blocks");
-  return { active: blocks[0], device: blocks[1] };
+  assert(blocks.length === 1, "expected one Device Pair recovery block");
+  return { device: blocks[0] };
 }
 
-async function writeFixture(stateDir, kind, { oversized }) {
-  const active = kind === "active";
-  const sourcePath = active
-    ? path.join(stateDir, "plugins", "active-memory", "session-toggles.json")
-    : path.join(stateDir, "device-pair-notify.json");
+async function writeFixture(stateDir, { oversized }) {
+  const sourcePath = path.join(stateDir, "device-pair-notify.json");
   const targetPath = `${sourcePath}.target`;
-  const source = active
-    ? JSON.stringify({
-        sessions: {
-          "telegram:dm:recovery": { disabled: true, updatedAt: 1700 },
-          ...(oversized
-            ? { __padding__: { disabled: false, note: "x".repeat(recoveryLimit) } }
-            : {}),
-        },
-      })
-    : JSON.stringify({
-        subscribers: [
-          {
-            to: " chat-recovery ",
-            accountId: " telegram-default ",
-            messageThreadId: " 007 ",
-            mode: "once",
-            addedAtMs: 1701.9,
-          },
-        ],
-        ...(oversized ? { padding: "x".repeat(recoveryLimit) } : {}),
-      });
+  const source = JSON.stringify({
+    subscribers: [
+      {
+        to: " chat-recovery ",
+        accountId: " telegram-default ",
+        messageThreadId: " 007 ",
+        mode: "once",
+        addedAtMs: 1701.9,
+      },
+    ],
+    ...(oversized ? { padding: "x".repeat(recoveryLimit) } : {}),
+  });
   await fs.mkdir(path.dirname(sourcePath), { recursive: true });
   await fs.writeFile(targetPath, source, "utf8");
   await fs.symlink(targetPath, sourcePath);
@@ -156,9 +124,9 @@ async function installFailureCommand(fakeBin, failure) {
   await fs.writeFile(path.join(fakeBin, command), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 }
 
-async function runRecoveryBlock({ block, repoRoot, tempRoot, kind, failure }) {
+async function runRecoveryBlock({ block, repoRoot, tempRoot, failure }) {
   const stateDir = path.join(tempRoot, "state");
-  const fixture = await writeFixture(stateDir, kind, {
+  const fixture = await writeFixture(stateDir, {
     oversized: !failure || failure === "oversized-output",
   });
   const proofEnv = await createProofEnvironment(tempRoot, repoRoot);
@@ -180,7 +148,6 @@ async function assertFailurePreservesSource({ block, repoRoot, failure, expected
       block,
       repoRoot,
       tempRoot,
-      kind: "active",
       failure,
     });
     const output = `${result.stdout}\n${result.stderr}`;
@@ -223,45 +190,22 @@ async function runProductionDoctor(repoRoot, env) {
 async function runSuccessfulProof(repoRoot, blocks) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-recovery-proof-"));
   try {
-    const activeRun = await runRecoveryBlock({
-      block: blocks.active,
-      repoRoot,
-      tempRoot,
-      kind: "active",
-    });
-    assert(
-      activeRun.result.status === 0,
-      `Active Memory recovery failed: ${activeRun.result.stderr}`,
-    );
     const deviceRun = await runRecoveryBlock({
       block: blocks.device,
       repoRoot,
       tempRoot,
-      kind: "device",
     });
     assert(
       deviceRun.result.status === 0,
       `Device Pair recovery failed: ${deviceRun.result.stderr}`,
     );
-    assert(await exists(activeRun.proofEnv.markerPath), "Active Memory block did not rerun Doctor");
     assert(await exists(deviceRun.proofEnv.markerPath), "Device Pair block did not rerun Doctor");
 
-    const activeAfter = (await fs.stat(activeRun.fixture.targetPath)).size;
     const deviceAfter = (await fs.stat(deviceRun.fixture.targetPath)).size;
-    assert(activeAfter <= recoveryLimit, "Active Memory recovery output exceeded 64 MiB");
     assert(deviceAfter <= recoveryLimit, "Device Pair recovery output exceeded 64 MiB");
-    assert(
-      await isSymlink(activeRun.fixture.sourcePath),
-      "Active Memory source symlink was not preserved",
-    );
     assert(
       await isSymlink(deviceRun.fixture.sourcePath),
       "Device Pair source symlink was not preserved",
-    );
-    assert(
-      (await fs.readFile(`${activeRun.fixture.sourcePath}.oversized-backup`, "utf8")) ===
-        activeRun.fixture.source,
-      "Active Memory backup bytes changed",
     );
     assert(
       (await fs.readFile(`${deviceRun.fixture.sourcePath}.oversized-backup`, "utf8")) ===
@@ -269,30 +213,17 @@ async function runSuccessfulProof(repoRoot, blocks) {
       "Device Pair backup bytes changed",
     );
 
-    await runProductionDoctor(repoRoot, activeRun.proofEnv.env);
+    await runProductionDoctor(repoRoot, deviceRun.proofEnv.env);
     const pluginState = await import(
       pathToFileURL(path.join(repoRoot, "src/plugin-state/plugin-state-store.ts"))
     );
-    const activeStore = pluginState.createPluginStateKeyedStore("active-memory", {
-      namespace: "session-toggles",
-      maxEntries: 10_000,
-      env: activeRun.proofEnv.env,
-    });
     const deviceStore = pluginState.createPluginStateKeyedStore("device-pair", {
       namespace: "notify-subscribers",
       maxEntries: 1_024,
-      env: activeRun.proofEnv.env,
+      env: deviceRun.proofEnv.env,
     });
-    const activeEntries = await activeStore.entries();
     const deviceEntries = await deviceStore.entries();
-    const activeValue = activeEntries[0]?.value;
     const deviceValue = deviceEntries[0]?.value;
-    assert(
-      activeEntries.length === 1 &&
-        activeValue?.sessionKey === "telegram:dm:recovery" &&
-        activeValue?.disabled === true,
-      "Active Memory supported record was not preserved",
-    );
     assert(
       deviceEntries.length === 1 &&
         deviceValue?.to === "chat-recovery" &&
@@ -303,20 +234,13 @@ async function runSuccessfulProof(repoRoot, blocks) {
       "Device Pair supported record was not preserved",
     );
     assert(
-      await isSymlink(`${activeRun.fixture.sourcePath}.migrated`),
-      "Active Memory archive lost symlink form",
-    );
-    assert(
       await isSymlink(`${deviceRun.fixture.sourcePath}.migrated`),
       "Device Pair archive lost symlink form",
     );
-    pluginState.closePluginStateDatabase();
+    await pluginState.closePluginStateDatabaseAsync();
     return {
-      activeBefore: Buffer.byteLength(activeRun.fixture.source, "utf8"),
-      activeAfter,
       deviceBefore: Buffer.byteLength(deviceRun.fixture.source, "utf8"),
       deviceAfter,
-      activeEntries: activeEntries.length,
       deviceEntries: deviceEntries.length,
       archives: true,
       backups: true,
@@ -333,10 +257,8 @@ async function main() {
     try {
       const stateDir = path.join(tempRoot, "state");
       const proofEnv = await createProofEnvironment(tempRoot, repoRoot);
-      const active = await writeFixture(stateDir, "active", { oversized: true });
-      const device = await writeFixture(stateDir, "device", { oversized: true });
+      const device = await writeFixture(stateDir, { oversized: true });
       proofEnv.env.OPENCLAW_STATE_DIR = stateDir;
-      const beforeActive = active.source;
       const beforeDevice = device.source;
       const doctor = await import(
         pathToFileURL(path.join(repoRoot, "src/infra/state-migrations.plugin-doctor.ts"))
@@ -346,31 +268,22 @@ async function main() {
         env: proofEnv.env,
         log: { info() {}, warn() {}, error() {} },
       });
-      assert(result.warnings.length === 2, "raw oversized sources did not remain blocked");
       assert(
-        (await fs.readFile(active.targetPath, "utf8")) === beforeActive,
-        "raw Active Memory source changed",
+        result.warnings.length === 1,
+        "raw oversized Device Pair source did not remain blocked",
       );
       assert(
         (await fs.readFile(device.targetPath, "utf8")) === beforeDevice,
         "raw Device Pair source changed",
       );
-      assert(
-        (await isSymlink(active.sourcePath)) && (await isSymlink(device.sourcePath)),
-        "raw source symlink changed",
-      );
-      assert(
-        !(await exists(`${active.sourcePath}.migrated`)) &&
-          !(await exists(`${device.sourcePath}.migrated`)),
-        "raw source archived unexpectedly",
-      );
+      assert(await isSymlink(device.sourcePath), "raw Device Pair source symlink changed");
+      assert(!(await exists(`${device.sourcePath}.migrated`)), "raw source archived unexpectedly");
       console.log(
         JSON.stringify({
           testedHead: spawnSync("git", ["rev-parse", "HEAD"], {
             cwd: repoRoot,
             encoding: "utf8",
           }).stdout.trim(),
-          activeBytes: Buffer.byteLength(beforeActive, "utf8"),
           deviceBytes: Buffer.byteLength(beforeDevice, "utf8"),
           warnings: result.warnings.length,
           sourcePreserved: true,
@@ -392,7 +305,7 @@ async function main() {
     ["mv", "Replacement failed"],
   ]) {
     await assertFailurePreservesSource({
-      block: blocks.active,
+      block: blocks.device,
       repoRoot,
       failure,
       expectedMessage,
@@ -405,7 +318,7 @@ async function main() {
         encoding: "utf8",
       }).stdout.trim(),
       ...success,
-      recoveryBlocksExecuted: ["active-memory", "device-pair"],
+      recoveryBlocksExecuted: ["device-pair"],
       failurePaths: ["backup", "jq", "size-check", "oversized-output", "replacement"],
       failureSourcesPreserved: true,
     }),

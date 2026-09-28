@@ -418,97 +418,31 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
 
 ## Bounded legacy JSON imports
 
-The bundled Active Memory and Device Pair migrations opt into explicit read
-bounds through `defineLegacyJsonStateMigration(...)`. Those limits are policy
-choices for these two imports; they are not default limits for the generic
-helper. Callers that omit `maxBytes` retain its historical unbounded-read
-behavior, and other exports from
-`openclaw/plugin-sdk/runtime-doctor-migrations` keep their separately documented
-contracts.
+The bundled Device Pair migration opts into explicit read bounds through
+`defineLegacyJsonStateMigration(...)`. These limits are policy choices for that
+import; they are not default limits for the generic helper. Callers that omit
+`maxBytes` retain its historical unbounded-read behavior, and other exports
+from `openclaw/plugin-sdk/runtime-doctor-migrations` keep their separately
+documented contracts.
 
-For the bundled Active Memory and Device Pair migrations, the first read is
-limited to 8 MiB and one recovery read is limited to 64 MiB. Sources that fit
-the recovery limit continue through parsing, plugin-state import, and archival.
-Sources above 64 MiB are not parsed or archived; Doctor warns and leaves the
-legacy source in place for manual recovery. The internal helper retains its
-historical no-limit behavior for existing callers.
+Device Pair reads up to 8 MiB first and retries once up to 64 MiB. Sources that
+fit the recovery limit continue through parsing, plugin-state import, and
+archival. Sources above 64 MiB are not parsed or archived; Doctor warns and
+leaves the legacy source in place for manual recovery. Current Doctor no longer
+imports retired Active Memory session toggles; it preserves that file and points
+operators to the 2026.9.5 bridge release.
+
+The Device Pair cutoff changes automatic import behavior for valid legacy files
+above 64 MiB. Migration-owner acceptance of this limit and its recovery path is
+still required before merge.
 
 ### Oversized legacy JSON recovery
 
-When Doctor reports that an Active Memory or Device Pair legacy source exceeds
-64 MiB, stop the Gateway (`openclaw gateway stop`) before editing the file and
-keep an untouched backup.
-The recovery below compacts only records that the production migration supports;
-it does not discard a supported disabled session toggle or subscriber. It also
-resolves a symlink before replacement, so the legacy path remains a symlink when
-one was already in use. Run the command for the affected plugin only.
-The examples require `jq` 1.7 or later.
+Current Doctor no longer imports retired Active Memory session toggles. It preserves that file and points operators to the 2026.9.5 bridge release: https://docs.openclaw.ai/install/updating#upgrading-very-old-versions. Do not compact that file and expect current Doctor to import it.
 
-```sh
-set -eu
-state_dir="${OPENCLAW_STATE_DIR:?Set OPENCLAW_STATE_DIR to the OpenClaw state directory}"
-source="$state_dir/plugins/active-memory/session-toggles.json"
-backup="$source.oversized-backup"
-if ! target="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$source")"; then
-  echo "Cannot resolve legacy source: $source" >&2
-  exit 1
-fi
-if test -e "$backup"; then
-  echo "Refusing to overwrite existing backup: $backup" >&2
-  exit 1
-fi
-if ! cp -pL "$source" "$backup"; then
-  echo "Backup failed; source was not replaced: $source" >&2
-  exit 1
-fi
-if ! tmp="$(mktemp "$target.recovery.XXXXXX")"; then
-  echo "Cannot create recovery temporary file; source was not replaced: $source" >&2
-  exit 1
-fi
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
-if ! jq -e '
-  {sessions: (
-    (.sessions // {})
-    | if type == "object" then
-        [to_entries[]
-         | select((.key | type) == "string" and (.key | length) > 0)
-         | select((.value | type) == "object" and .value.disabled == true)
-         | {key: .key, value: {
-             sessionKey: .key,
-             disabled: true,
-             updatedAt: (if (.value.updatedAt | type) == "number" and (.value.updatedAt | isfinite)
-                         then .value.updatedAt else (now * 1000 | floor) end)
-           }}]
-        | from_entries
-      else {} end
-  )}
-' "$source" > "$tmp"; then
-  echo "Compaction failed; source and backup were preserved: $source" >&2
-  exit 1
-fi
-if ! size="$(wc -c < "$tmp")"; then
-  echo "Cannot measure recovery output; source and backup were preserved: $source" >&2
-  exit 1
-fi
-if test "$size" -gt $((64 * 1024 * 1024)); then
-  echo "Recovery output is ${size} bytes; source and backup were preserved: $source" >&2
-  exit 1
-fi
-if ! mv -f "$tmp" "$target"; then
-  echo "Replacement failed; source and backup were preserved: $source" >&2
-  exit 1
-fi
-trap - EXIT HUP INT TERM
-openclaw doctor --fix
-```
+For a Device Pair source above 64 MiB, stop the Gateway (`openclaw gateway stop`) before editing and keep an untouched backup. The guarded recovery below preserves supported subscriber fields, resolves symlinks before replacement, checks the output against 64 MiB, and reruns `openclaw doctor --fix`. It requires jq 1.7 or later.
 
-For Device Pair, use the same backup, target, size-check, replacement, and
-Doctor steps, but replace the `jq` block with this one. It preserves every
-valid subscriber field used by Device Pair, normalizes the same optional fields
-as the production parser, and intentionally omits the obsolete request-id
-cache, which is not imported by the migration.
-
-Run this complete guarded block with `source="$state_dir/device-pair-notify.json"`.
+Run this complete guarded block with `OPENCLAW_STATE_DIR` set to the OpenClaw state directory:
 
 ```sh
 set -eu
@@ -576,13 +510,7 @@ trap - EXIT HUP INT TERM
 openclaw doctor --fix
 ```
 
-Both guarded blocks verify that the temporary file is at or below 64 MiB before
-`mv`, then rerun `openclaw doctor --fix`. Doctor imports the compact source and
-archives the original at `<source>.migrated`; retain the separate
-`.oversized-backup` until the imported entries have been checked. If any
-prerequisite fails or the compact file is still too large, the source and backup
-remain unchanged. Never delete the original or overwrite it before the size
-check.
+The block verifies that the temporary file is at or below 64 MiB before `mv`, then reruns Doctor. Device Pair imports the compact source and archives the original at `<source>.migrated`; retain the separate `.oversized-backup` until imported entries have been checked. If any prerequisite fails or the compact file is still too large, the source and backup remain unchanged. Never delete the original or overwrite it before the size check.
 
 Use `phase: "after-session-repair"` when a migration needs canonical session
 ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies

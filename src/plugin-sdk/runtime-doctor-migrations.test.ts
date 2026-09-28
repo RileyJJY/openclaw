@@ -9,7 +9,6 @@ import {
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   defineLegacyJsonStateMigration,
   definePluginDoctorMigrationFromPlans,
