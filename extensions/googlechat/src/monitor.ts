@@ -95,7 +95,8 @@ async function processGoogleChatEvent(
   if (eventType !== "MESSAGE") {
     return;
   }
-  const { account, config, runtime, core, statusSink, mediaMaxMb } = target;
+  const { account, runtime, core, statusSink, mediaMaxMb } = target;
+  const config = core.config.current() as OpenClawConfig;
   const space = event.space;
   const message = event.message;
   if (!space || !message) {

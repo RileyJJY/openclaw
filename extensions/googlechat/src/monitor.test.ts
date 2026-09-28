@@ -166,6 +166,7 @@ async function processGoogleChatTestEvent(params: {
   event: GoogleChatEvent;
   account: ResolvedGoogleChatAccount;
   config?: Record<string, unknown>;
+  currentConfig?: Record<string, unknown>;
   runtime?: GoogleChatRuntimeEnv;
   core: GoogleChatCoreRuntime;
   mediaMaxMb?: number;
@@ -174,13 +175,17 @@ async function processGoogleChatTestEvent(params: {
   if (!routingMocks.processEvent) {
     throw new Error("Expected Google Chat webhook event processor registration");
   }
+  const core = {
+    ...params.core,
+    config: { current: () => params.currentConfig ?? params.config ?? {} },
+  } as unknown as GoogleChatCoreRuntime;
   await routingMocks.processEvent(
     params.event,
     {
       account: params.account,
       config: params.config ?? {},
       runtime: params.runtime ?? createRuntimeSpies(),
-      core: params.core,
+      core,
       mediaMaxMb: params.mediaMaxMb ?? 10,
       path: "/googlechat",
     },
@@ -898,6 +903,68 @@ describe("googlechat monitor direct messages", () => {
       thread: undefined,
     });
     expect(runTurn).toHaveBeenCalledOnce();
+  });
+
+  it("uses the current config snapshot for each inbound turn", async () => {
+    const startupConfig = { messages: { visibleReplies: "message_tool" } };
+    const updatedConfig = { messages: { visibleReplies: "automatic" } };
+    const { core, runTurn } = createInboundClassificationHarness();
+    allowGoogleChatMediaSender();
+
+    await processGoogleChatTestEvent({
+      event: createGoogleChatMediaTestEvent({ id: "config-before", text: "hello" }),
+      account: googleChatMediaTestAccount,
+      config: startupConfig,
+      currentConfig: startupConfig,
+      core,
+    });
+    await processGoogleChatTestEvent({
+      event: createGoogleChatMediaTestEvent({ id: "config-after", text: "hello" }),
+      account: googleChatMediaTestAccount,
+      config: startupConfig,
+      currentConfig: updatedConfig,
+      core,
+    });
+
+    const readTurnConfig = (index: number) => {
+      const runArg = runTurn.mock.calls[index]?.[0] as
+        | { adapter?: { resolveTurn?: () => { cfg?: Record<string, unknown> } } }
+        | undefined;
+      return runArg?.adapter?.resolveTurn?.().cfg;
+    };
+    expect(runTurn).toHaveBeenCalledTimes(2);
+    expect(readTurnConfig(0)).toBe(startupConfig);
+    expect(readTurnConfig(1)).toBe(updatedConfig);
+    expect(inboundMocks.resolveChannelInboundRouteEnvelope).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ cfg: updatedConfig, channel: "googlechat" }),
+    );
+    const accessCall = accessMocks.applyGoogleChatInboundAccessPolicy.mock.calls[1]?.[0] as
+      | { config?: Record<string, unknown> }
+      | undefined;
+    expect(accessCall?.config).toBe(updatedConfig);
+  });
+
+  it("keeps the same config when no reload occurs between inbound turns", async () => {
+    const currentConfig = { messages: { visibleReplies: "message_tool" } };
+    const { core, runTurn } = createInboundClassificationHarness();
+    allowGoogleChatMediaSender();
+
+    for (const id of ["config-stable-before", "config-stable-after"]) {
+      await processGoogleChatTestEvent({
+        event: createGoogleChatMediaTestEvent({ id, text: "hello" }),
+        account: googleChatMediaTestAccount,
+        config: currentConfig,
+        currentConfig,
+        core,
+      });
+    }
+
+    const runArg = runTurn.mock.calls[1]?.[0] as
+      | { adapter?: { resolveTurn?: () => { cfg?: Record<string, unknown> } } }
+      | undefined;
+    expect(runTurn).toHaveBeenCalledTimes(2);
+    expect(runArg?.adapter?.resolveTurn?.().cfg).toBe(currentConfig);
   });
 
   it("drops invalid event timestamps from inbound runtime payloads", async () => {
