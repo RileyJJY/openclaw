@@ -1,6 +1,7 @@
 import { EventEmitter, once } from "node:events";
 import { createServer as createHttpsServer } from "node:https";
 import net from "node:net";
+import { Worker } from "node:worker_threads";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
@@ -99,6 +100,57 @@ function sendWorkerHello(
     }),
   );
 }
+
+describe("worker connection close during durable RPC", () => {
+  it("lets the close event run before replaying a durable session send", async () => {
+    const worker = new Worker(
+      new URL("./worker-connection-closing-window.worker.ts", import.meta.url),
+      {
+        execArgv: ["--import", import.meta.resolve("tsx")],
+      },
+    );
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const observed: string[] = [];
+    let closingReadyState: number | undefined;
+    try {
+      const result = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        timeout = setTimeout(
+          () => resolve({ type: "timeout", observed: observed.join(",") }),
+          2_000,
+        );
+        worker.on("error", reject);
+        worker.on("message", (message: Record<string, unknown>) => {
+          observed.push(String(message.type));
+          if (message.type === "closing-window" && typeof message.readyState === "number") {
+            closingReadyState = message.readyState;
+          }
+          if (message.type === "ready") {
+            worker.postMessage({ type: "close" });
+          } else if (message.type === "completed" || message.type === "error") {
+            if (timeout) {
+              clearTimeout(timeout);
+            }
+            resolve(message);
+          }
+        });
+      });
+      if (result.type === "timeout") {
+        throw new Error(
+          `worker connection race timed out after: ${JSON.stringify(result.observed)}`,
+        );
+      }
+      expect(result).toMatchObject({ type: "completed", requestCount: 2 });
+      expect(observed).toContain("closing-window");
+      expect(closingReadyState).toBeDefined();
+      expect(closingReadyState).not.toBe(WebSocket.OPEN);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      await worker.terminate();
+    }
+  });
+});
 
 async function createAdmissionWriteFixture(onAdmissionRequestSent: () => void) {
   type WriteCallback = NonNullable<Parameters<WebSocket["send"]>[2]>;
