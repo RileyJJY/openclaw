@@ -87,6 +87,7 @@ async function processGoogleChatEvent(
   event: GoogleChatEvent,
   target: WebhookTarget,
   turnAdoptionLifecycle?: GoogleChatIngressLifecycle,
+  config: OpenClawConfig = target.config,
 ): Promise<void> {
   const eventType = event.type ?? event.eventType;
   if (eventType === "CARD_CLICKED") {
@@ -96,7 +97,7 @@ async function processGoogleChatEvent(
   if (eventType !== "MESSAGE") {
     return;
   }
-  const { account, config, runtime, core, statusSink, mediaMaxMb } = target;
+  const { account, runtime, core, statusSink, mediaMaxMb } = target;
   const space = event.space;
   const message = event.message;
   if (!space || !message) {
@@ -455,14 +456,12 @@ export async function startGoogleChatMonitor(
     runtime: options.runtime,
     abortSignal: options.abortSignal,
     dispatch: async (event, lifecycle) => {
-      await processGoogleChatEvent(event, target, lifecycle);
+      await processGoogleChatEvent(event, target, lifecycle, readConfig());
     },
   });
   const target: WebhookTarget = {
     account: options.account,
-    get config() {
-      return readConfig();
-    },
+    config: options.config,
     runtime: options.runtime,
     core,
     path: webhookPath,
