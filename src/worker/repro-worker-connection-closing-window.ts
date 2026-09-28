@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { parentPort } from "node:worker_threads";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { WebSocket, WebSocketServer } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -46,7 +47,6 @@ if (!address || typeof address === "string") {
 }
 
 let firstPeer: WebSocket | undefined;
-let connection!: ReturnType<typeof createWorkerConnection>;
 let socketCount = 0;
 let requestCount = 0;
 let raceStarted = false;
@@ -54,7 +54,7 @@ let raceStarted = false;
 server.on("connection", (peer) => {
   firstPeer ??= peer;
   peer.on("message", (data) => {
-    const frame = JSON.parse(data.toString()) as { id?: string; method?: string };
+    const frame = JSON.parse(rawDataToString(data)) as { id?: string; method?: string };
     if (frame.method === "connect" && frame.id) {
       peer.send(
         JSON.stringify({
@@ -87,12 +87,12 @@ server.on("connection", (peer) => {
   });
 });
 
-connection = createWorkerConnection({
+const connection = createWorkerConnection({
   endpoint: { kind: "websocket", url: `ws://127.0.0.1:${address.port}/` },
   connectParams,
   reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-  createSocket: (url, options) => {
-    const socket = new WebSocket(url, options);
+  createSocket: (url) => {
+    const socket = new WebSocket(url);
     socketCount += 1;
     if (socketCount !== 1) {
       return socket;
@@ -101,7 +101,7 @@ connection = createWorkerConnection({
     socket.emit = ((event: string | symbol, ...args: unknown[]) => {
       if (event === "close" && !raceStarted) {
         raceStarted = true;
-        parentPort?.postMessage({ type: "closing-window", readyState: socket.readyState });
+        parentPort?.postMessage({ type: "closing-window", readyState: socket.readyState }, []);
         const request = connection.requestSessionsSend({
           toolCallId: "closing-window-call",
           sessionKey: "agent:main:closing-window",
@@ -109,22 +109,34 @@ connection = createWorkerConnection({
         });
         void request.then(
           async (response) => {
+            if (!response.ok) {
+              parentPort?.postMessage({ type: "error", message: response.error.message }, []);
+              return;
+            }
             await connection.stop();
             for (const client of server.clients) {
               client.terminate();
             }
-            await new Promise<void>((resolve) => server.close(() => resolve()));
-            parentPort?.postMessage({
-              type: "completed",
-              requestCount,
-              resultJson: response.payload.resultJson,
+            await new Promise<void>((resolve) => {
+              server.close(() => resolve());
             });
+            parentPort?.postMessage(
+              {
+                type: "completed",
+                requestCount,
+                resultJson: response.payload.resultJson,
+              },
+              [],
+            );
           },
           (error: unknown) => {
-            parentPort?.postMessage({
-              type: "error",
-              message: error instanceof Error ? error.message : String(error),
-            });
+            parentPort?.postMessage(
+              {
+                type: "error",
+                message: error instanceof Error ? error.message : String(error),
+              },
+              [],
+            );
           },
         );
         setImmediate(() => {
@@ -149,4 +161,4 @@ parentPort?.on("message", (message: { type?: string }) => {
     firstPeer?.terminate();
   }
 });
-parentPort?.postMessage({ type: "ready" });
+parentPort?.postMessage({ type: "ready" }, []);

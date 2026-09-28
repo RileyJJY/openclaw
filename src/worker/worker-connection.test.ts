@@ -104,7 +104,7 @@ function sendWorkerHello(
 describe("worker connection close during durable RPC", () => {
   it("lets the close event run before replaying a durable session send", async () => {
     const worker = new Worker(
-      new URL("./worker-connection-closing-window.worker.ts", import.meta.url),
+      new URL("./repro-worker-connection-closing-window.ts", import.meta.url),
       {
         execArgv: ["--import", import.meta.resolve("tsx")],
       },
@@ -125,7 +125,7 @@ describe("worker connection close during durable RPC", () => {
             closingReadyState = message.readyState;
           }
           if (message.type === "ready") {
-            worker.postMessage({ type: "close" });
+            worker.postMessage({ type: "close" }, []);
           } else if (message.type === "completed" || message.type === "error") {
             if (timeout) {
               clearTimeout(timeout);
