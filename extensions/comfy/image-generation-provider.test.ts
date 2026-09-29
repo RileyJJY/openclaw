@@ -46,17 +46,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-type FetchGuardRequest = {
-  url?: unknown;
-  auditContext?: unknown;
-  timeoutMs?: unknown;
-  init?: {
-    method?: unknown;
-    headers?: HeadersInit;
-    body?: BodyInit | null;
-  };
-};
 type RealGuardParams = Parameters<FetchWithSsrFGuard>[0];
+type FetchGuardRequest = RealGuardParams;
 type RealGuardFetchImpl = NonNullable<RealGuardParams["fetchImpl"]>;
 type RealGuardLookupFn = NonNullable<RealGuardParams["lookupFn"]>;
 type RealGuardHarness = {
@@ -116,10 +107,6 @@ function mockLocalImageResponses(
 const COMFY_SERVICE_HOST_LOCAL_POLICY = {
   allowedOrigins: ["http://comfyui:8188"],
   hostnameAllowlist: ["comfyui"],
-};
-
-const COMFY_SERVICE_HOST_EXPLICIT_PRIVATE_NETWORK_POLICY = {
-  allowedOrigins: ["http://comfyui:8188"],
 };
 
 const COMFY_PUBLIC_LOCAL_HOST_POLICY = {

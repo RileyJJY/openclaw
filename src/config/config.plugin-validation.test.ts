@@ -303,7 +303,7 @@ describe("config plugin validation", () => {
 
   it("accepts Comfy workflow settings under the canonical plugin config root", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "openclaw" }] },
+      agents: { entries: { openclaw: {} } },
       plugins: {
         enabled: true,
         load: { paths: [comfySchemaPluginDir] },
