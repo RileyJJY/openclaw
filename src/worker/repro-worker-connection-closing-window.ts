@@ -54,12 +54,17 @@ let raceStarted = false;
 server.on("connection", (peer) => {
   firstPeer ??= peer;
   peer.on("message", (data) => {
-    const frame = JSON.parse(rawDataToString(data)) as { id?: string; method?: string };
-    if (frame.method === "connect" && frame.id) {
+    const frame: unknown = JSON.parse(rawDataToString(data));
+    if (typeof frame !== "object" || frame === null) {
+      return;
+    }
+    const method = "method" in frame && typeof frame.method === "string" ? frame.method : undefined;
+    const id = "id" in frame && typeof frame.id === "string" ? frame.id : undefined;
+    if (method === "connect" && id) {
       peer.send(
         JSON.stringify({
           type: "res",
-          id: frame.id,
+          id,
           ok: true,
           payload: {
             type: "worker-hello-ok",
@@ -73,12 +78,12 @@ server.on("connection", (peer) => {
           },
         }),
       );
-    } else if (frame.method === "worker.sessions.send" && frame.id) {
+    } else if (method === "worker.sessions.send" && id) {
       requestCount += 1;
       peer.send(
         JSON.stringify({
           type: "res",
-          id: frame.id,
+          id,
           ok: true,
           payload: { resultJson: '{"accepted":true}' },
         }),
@@ -98,7 +103,7 @@ const connection = createWorkerConnection({
       return socket;
     }
     const emit = socket.emit.bind(socket);
-    socket.emit = ((event: string | symbol, ...args: unknown[]) => {
+    const interceptEmit: typeof socket.emit = (event, ...args) => {
       if (event === "close" && !raceStarted) {
         raceStarted = true;
         parentPort?.postMessage({ type: "closing-window", readyState: socket.readyState }, []);
@@ -140,12 +145,13 @@ const connection = createWorkerConnection({
           },
         );
         setImmediate(() => {
-          Reflect.apply(emit, socket, [event, ...args]);
+          emit(event, ...args);
         });
         return true;
       }
-      return Reflect.apply(emit, socket, [event, ...args]) as boolean;
-    }) as typeof socket.emit;
+      return emit(event, ...args);
+    };
+    socket.emit = interceptEmit;
     return socket;
   },
 });
