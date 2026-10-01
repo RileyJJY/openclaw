@@ -195,6 +195,7 @@ describe("openai completions stream", () => {
       input: 8,
       output: 10,
       cacheRead: 0,
+      contextUsage: { state: "available", promptTokens: 8, totalTokens: 18 },
       totalTokens: 18,
     });
   });
