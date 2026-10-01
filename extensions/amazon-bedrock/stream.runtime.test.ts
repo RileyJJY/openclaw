@@ -275,21 +275,21 @@ describe("Bedrock assistant tool-use replay", () => {
       ],
     }) as never;
 
-  it("normalizes malformed stored arguments at the Bedrock request boundary", async () => {
-    const malformedArguments = '{"path":';
-    const context = replayContext(malformedArguments);
-    const input = await captureCommandInput(
-      bedrockModel({}),
-      context,
-      {},
-      expectObjectToolUseInput,
-    );
-    expect(findToolUse(input)?.input).toEqual({});
-    expect(
-      (context as { messages: Array<{ content?: Array<{ arguments?: unknown }> }> }).messages[0]
-        ?.content?.[0]?.arguments,
-    ).toBe(malformedArguments);
-  });
+  it.each(['{"path":', 42])(
+    "normalizes invalid stored arguments %j at the Bedrock request boundary",
+    async (malformedArguments) => {
+      const context = replayContext(malformedArguments);
+      const originalContext = JSON.stringify(context);
+      const input = await captureCommandInput(
+        bedrockModel({}),
+        context,
+        {},
+        expectObjectToolUseInput,
+      );
+      expect(findToolUse(input)?.input).toEqual({});
+      expect(JSON.stringify(context)).toBe(originalContext);
+    },
+  );
 
   it("preserves valid object arguments at the same request boundary", async () => {
     const validArguments = { path: "README.md" };
