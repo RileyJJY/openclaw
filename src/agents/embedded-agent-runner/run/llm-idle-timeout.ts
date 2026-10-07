@@ -315,7 +315,7 @@ export function streamWithIdleTimeout(
           clearTimers();
           rejectIdleTimeout?.(error);
         };
-        const armTimer = (progress = true) => {
+        const armTimer = (modelProgress = true) => {
           clearTimeout(idleTimer);
           if (!guardIterationGaps || settled || (!producerCompletion && !rejectIdleTimeout)) {
             clearTimers();
@@ -330,16 +330,16 @@ export function streamWithIdleTimeout(
               : timeoutMs;
           streamFirstArmDone = true;
           idleTimer = startTimer(effectiveTimeout, rejectTimeout);
-          if (progress || !progressTimer) {
+          if (modelProgress || !progressTimer) {
             clearTimeout(progressTimer);
             progressTimer = startTimer(progressTimeoutMs, rejectTimeout, true);
           }
         };
         const unsubscribeLlmActivity = onLlmRequestActivity(
           streamAbortController.signal,
-          (progress) => {
-            armTimer(progress);
-            if (progress && runId && areDiagnosticsEnabledForProcess()) {
+          (modelProgress) => {
+            armTimer(modelProgress);
+            if (modelProgress && runId && areDiagnosticsEnabledForProcess()) {
               markDiagnosticRunProgress({ runId, reason: "model_call:stream_progress" });
             }
           },
