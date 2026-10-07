@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import { measureUtf8AppendBytes } from "../transports/openai-transport-shared.js";
+import {
+  hasOpenAICompletionsDeltaContent,
+  measureUtf8AppendBytes,
+} from "../transports/openai-transport-shared.js";
 import { finalizeTerminalToolCallArguments } from "../transports/transport-stream-shared.js";
 import type { AssistantMessage, ToolCall } from "../types.js";
+
+export { hasOpenAICompletionsDeltaContent } from "../transports/openai-transport-shared.js";
 
 type ChatCompletionToolCallDelta = ChatCompletionChunk.Choice.Delta.ToolCall;
 const MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES = 256_000;
@@ -69,31 +74,6 @@ export function createOpenAIEncryptedToolCallReasoningTracker() {
       }
     },
   };
-}
-
-function hasObservableContent(value: unknown): boolean {
-  if (typeof value === "string") {
-    return value.length > 0;
-  }
-  if (Array.isArray(value)) {
-    return value.some(hasObservableContent);
-  }
-  if (isRecord(value)) {
-    return Object.entries(value).some(
-      ([field, nestedValue]) =>
-        field !== "type" &&
-        field !== "id" &&
-        field !== "index" &&
-        hasObservableContent(nestedValue),
-    );
-  }
-  return false;
-}
-
-export function hasOpenAICompletionsDeltaContent(delta: ChatCompletionChunk.Choice.Delta): boolean {
-  return Object.entries(delta).some(
-    ([field, value]) => field !== "role" && hasObservableContent(value),
-  );
 }
 
 /** Normalize the SDK's legacy single-function lane into its modern tool-call shape. */

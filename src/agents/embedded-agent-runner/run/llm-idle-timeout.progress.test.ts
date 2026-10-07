@@ -97,7 +97,9 @@ async function openStream(scope: "creation-and-gaps" | "creation-only" = "creati
       if (activity.length >= count) {
         return Promise.resolve();
       }
-      return new Promise<void>((resolve) => activityWaiters.push({ count, resolve }));
+      return new Promise<void>((resolve) => {
+        activityWaiters.push({ count, resolve });
+      });
     },
     async send(chunk: ChatCompletionChunk) {
       chunks.push(chunk);

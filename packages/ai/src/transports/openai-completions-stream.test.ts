@@ -498,6 +498,31 @@ async function runChunks(chunks: readonly unknown[], model = makeCompletionsMode
   return { output, events };
 }
 
+async function captureModelProgress(
+  chunks: readonly unknown[],
+  model = makeCompletionsModel(),
+  options: { emitReasoning?: boolean } = {},
+) {
+  const output = createAssistantOutput(model);
+  const controller = new AbortController();
+  const progress: boolean[] = [];
+  const unsubscribe = onLlmRequestActivity(controller.signal, (modelProgress) => {
+    progress.push(modelProgress);
+  });
+  try {
+    await processCompletionsStream(
+      streamChunks(chunks),
+      output,
+      model,
+      { push() {} },
+      { ...options, signal: controller.signal },
+    );
+  } finally {
+    unsubscribe();
+  }
+  return { output, progress };
+}
+
 describe("openai completions stream", () => {
   it("clamps uncached prompt usage at zero", () => {
     const usage = parseOpenAICompletionsUsage(
@@ -687,6 +712,43 @@ describe("openai completions stream", () => {
 
     expect(events.map((event) => event.type)).toEqual(["text_start", "text_delta"]);
     expect(output.content).toEqual([{ type: "text", text: "Hi" }]);
+  });
+
+  it.each([
+    {
+      name: "nested empty text",
+      delta: { content: [{ type: "text", text: "" }] },
+    },
+    {
+      name: "empty legacy function call",
+      delta: { function_call: {} },
+    },
+  ])("does not count $name as model progress", async ({ delta }) => {
+    const { output, progress } = await captureModelProgress([
+      makeCompletionsChunk(delta),
+      makeCompletionsChunk({ role: "assistant" }, "stop"),
+    ]);
+
+    expect(progress).toEqual([false, false]);
+    expect(output.content).toEqual([]);
+  });
+
+  it("counts valid tool-call fragments as model progress", async () => {
+    const { progress } = await captureModelProgress([
+      makeCompletionsChunk({
+        tool_calls: [
+          {
+            index: 0,
+            id: "call-progress",
+            type: "function",
+            function: { name: "lookup", arguments: "{}" },
+          },
+        ],
+      }),
+      makeCompletionsChunk({}, "tool_calls"),
+    ]);
+
+    expect(progress).toEqual([true, false]);
   });
 
   it("yields to aborts during bursty OpenAI-compatible streams", async () => {

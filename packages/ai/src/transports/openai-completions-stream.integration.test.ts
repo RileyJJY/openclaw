@@ -531,7 +531,9 @@ describe("openai completions stream", () => {
         if (!response || response.destroyed) {
           throw new Error("Loopback response is not available");
         }
-        const parsedActivity = new Promise<void>((resolve) => activityWaiters.add(resolve));
+        const parsedActivity = new Promise<void>((resolve) => {
+          activityWaiters.add(resolve);
+        });
         response.write(`data: ${JSON.stringify(chunk)}\n\n`);
         await awaitGate(parsedActivity, "Stream collection settled before parsing a sent chunk");
         await vi.advanceTimersByTimeAsync(0);
