@@ -9,7 +9,7 @@ read_when:
   - You are looking for the Code Mode page that matches your task
 ---
 
-Code mode is an experimental, opt-in OpenClaw agent-runtime feature. When
+Code mode is an experimental OpenClaw agent-runtime feature. When
 enabled, the model no longer sees every enabled tool schema. Instead, it sees
 `exec`, `wait`, and any direct-only tool whose structured result cannot cross
 the JSON-only guest bridge. The model writes a small JavaScript
@@ -18,10 +18,11 @@ TypeScript-style signatures describe the available tools; executable cells use
 plain JavaScript without type annotations.
 
 <Note>
-OpenClaw Code Mode is off by default. To try it, open **Settings → Agents &
-Tools → Labs** and turn on **Code Mode**. The Labs switch writes the `"auto"`
-tier, which engages only for models marked as preferred Code Mode performers.
-This is the global default. Agent and model overrides take precedence.
+When `tools.codeMode` is absent, OpenClaw uses the `"auto"` tier and engages
+Code Mode only for models marked as preferred Code Mode performers. An authored
+object without `enabled` remains off, as do `false` and `{ enabled: false }`.
+Agent and model overrides take precedence. Use **Settings → Agents & Tools →
+Labs → Code Mode** to choose the global setting.
 </Note>
 
 This page documents OpenClaw Code Mode, not Codex Code Mode. The two features
@@ -34,7 +35,7 @@ separate implementations:
   in Codex's in-process V8 Code Mode runtime.
 - OpenClaw Code Mode runs in the generic OpenClaw agent runtime and is
   enabled through global, agent, or model activation settings. Its `exec`
-  tool takes a JSON `{ code }` payload, executed by the selected Node or
+  tool takes a JSON `{ title, code }` payload, executed by the selected Node or
   QuickJS executor.
 
 Both are JavaScript execution surfaces, not shell-command surfaces. Treat them
@@ -80,7 +81,9 @@ job. Open the page that matches your task.
   the fallback. Input hints retain integer and numeric bounds as comments, such
   as `offset?: number /* integer, >= 1 */`. Other validation details remain in
   the full schema available through `describe()`. These hints do not change
-  tool validation or output contracts.
+  tool validation or output contracts. Core file and shell tool signatures stay
+  first in the bounded index, followed by tools with declared output hints, so
+  catalog growth does not hide their input argument names.
 - Guest code calls globals directly or searches the hidden catalog for callable
   handles. A handle exposes bounded metadata and `describe()`, but never the
   exact internal catalog id. Calls use the same execution path as normal agent

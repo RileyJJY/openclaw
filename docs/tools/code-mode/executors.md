@@ -11,7 +11,9 @@ read_when:
 Code Mode uses **Node** by default when enabled. Select **QuickJS** when you
 need a hardened guest runtime. Both executors run the same plain JavaScript
 cells, expose the same typed tool discovery, and use the same `exec` and `wait`
-tools. Code Mode itself remains off by default.
+tools. With no global Code Mode setting, automatic per-model activation applies.
+Choosing an executor in Labs preserves activation. When writing an object in
+config, include `enabled: "auto"` to retain automatic activation.
 
 ## Choose an executor
 
@@ -25,6 +27,9 @@ Node's `node:vm` is **not a security boundary**. The worker keeps guest
 computation off the Gateway event loop, but it shares the Gateway process's
 operating-system privileges. Treat Node Code Mode as trusted host execution.
 </Warning>
+
+Bridge settlement and failure provenance are host-owned under both executors,
+keeping diagnostics trustworthy regardless of executor isolation.
 
 The intended guest API does not expose Node's filesystem, networking, process,
 environment, or module-loading APIs. Module guards and a small set of globals
@@ -93,6 +98,9 @@ Gateway shutdown releases them. Neither survives a Gateway restart.
 `timeoutMs`, output limits, pending-call limits, suspended-run capacity, and
 `snapshotTtlSeconds` apply to both executors. The historical
 `snapshotTtlSeconds` name also controls Node's suspended-context lifetime.
+The host enforces Node's execution deadline by terminating an overdue worker,
+including synchronous loops and promise continuations. Output emitted before
+the timeout remains available within the configured output limit.
 QuickJS additionally checks serialized VM state against `maxSnapshotBytes`.
 Node has no serialized VM snapshot, so that setting does not bound its live
 heap. Saved JSON results retain their shared memory/snapshot data allowance.

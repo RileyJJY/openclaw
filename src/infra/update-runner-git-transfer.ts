@@ -1,22 +1,25 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
 import { openLocalFileSafely, type OpenResult } from "./fs-safe.js";
-import { runStep } from "./update-runner-command.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { classifyPartialCloneGitFailure } from "./update-runner-git-target.js";
-import type { RunStepOptions, UpdateStepResult } from "./update-runner-types.js";
+import type { RunStepOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const LARGE_CANDIDATE_PACK_WARNING_BYTES = 256 * 1024 * 1024;
 
-function recordStagingFailure(
+async function recordStagingFailure(
   step: RunStepOptions,
   name: string,
   command: string,
   message: string,
   durationMs = 0,
-): undefined {
+): Promise<undefined> {
   const failure: UpdateStepResult = {
     name,
     command,
@@ -26,7 +29,11 @@ function recordStagingFailure(
     stderrTail: message,
   };
   step.results?.push(failure);
-  step.progress?.onStepComplete?.({ ...failure, index: step.stepIndex, total: step.totalSteps });
+  await reportUpdateStepCompletion(step.progress, {
+    ...failure,
+    index: step.stepIndex,
+    total: step.totalSteps,
+  });
   return undefined;
 }
 
@@ -77,12 +84,7 @@ export async function prepareGitCandidateTransfer(params: {
     });
     // A process may exit zero after handling the output-limit termination signal.
     // Its captured object list is still incomplete and must never be admitted.
-    return result.exitCode === 0 &&
-      !result.killed &&
-      !result.signal &&
-      (!result.termination || result.termination === "exit")
-      ? stdout.trim()
-      : undefined;
+    return !isFailedUpdateStep(result) && !result.signal ? stdout.trim() : undefined;
   };
   const upstreamSha = upstreamRef
     ? await runGit("git-pin-update-upstream", ["rev-parse", upstreamRef])
@@ -154,7 +156,7 @@ export async function prepareGitCandidateTransfer(params: {
         !pending.delete(oid) ||
         !["blob", "tree", "missing"].includes(type)
       ) {
-        return recordStagingFailure(
+        return await recordStagingFailure(
           { ...step, cwd: installedRoot },
           "git-retained-object-inventory",
           "verify retained Git object availability",
@@ -166,7 +168,7 @@ export async function prepareGitCandidateTransfer(params: {
       }
     }
     if (pending.size) {
-      return recordStagingFailure(
+      return await recordStagingFailure(
         { ...step, cwd: installedRoot },
         "git-retained-object-inventory",
         "verify retained Git object availability",
@@ -205,7 +207,7 @@ export async function prepareGitCandidateTransfer(params: {
     pack = stagedPack.use(await openLocalFileSafely({ filePath: packPath }));
     requiredBytes = pack.stat.size + (await fs.stat(`${prefix}-${hash}.idx`)).size;
   } catch (error) {
-    return recordStagingFailure(
+    return await recordStagingFailure(
       step,
       "git-update-pack-read",
       `read update pack ${packPath}`,
@@ -227,7 +229,7 @@ export async function prepareGitCandidateTransfer(params: {
   const capacity = tryReadDiskSpace(objectDirectory);
   if (capacity && capacity.availableBytes < requiredBytes) {
     const reason = "snapshot-capacity-insufficient" as const;
-    recordStagingFailure(
+    await recordStagingFailure(
       step,
       "git update pack capacity",
       "measure Git update pack capacity",
@@ -255,7 +257,11 @@ export async function prepareGitCandidateTransfer(params: {
     ...(warnings.length ? { warnings } : {}),
   };
   step.results?.push(measured);
-  step.progress?.onStepComplete?.({ ...measured, index: step.stepIndex, total: step.totalSteps });
+  await reportUpdateStepCompletion(step.progress, {
+    ...measured,
+    index: step.stepIndex,
+    total: step.totalSteps,
+  });
   const keepMessage = `openclaw-update-${randomUUID()}`;
   const retainedPack = stagedPack.move();
   return {
@@ -270,7 +276,7 @@ export async function prepareGitCandidateTransfer(params: {
         runCommand: (argv, options) =>
           target.runCommand(argv, { ...options, stdinFileDescriptor: pack.handle.fd }),
       });
-      if (imported.exitCode !== 0) {
+      if (isFailedUpdateStep(imported)) {
         return false;
       }
       if (!upstreamRef || !upstreamSha) {
@@ -281,7 +287,7 @@ export async function prepareGitCandidateTransfer(params: {
         name: "git-import-admitted-upstream",
         argv: ["git", "-C", target.cwd, "update-ref", upstreamRef, upstreamSha],
       });
-      return tracked.exitCode === 0;
+      return !isFailedUpdateStep(tracked);
     },
     async cleanup(target: RunStepOptions): Promise<void> {
       try {
@@ -314,6 +320,9 @@ export async function prepareGitCandidateTransfer(params: {
           await fs.unlink(keepPath);
         }
       } catch (error) {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
         const warning: UpdateStepResult = {
           name: "git-update-pack-cleanup",
           command: "release retained Git update pack",
@@ -327,7 +336,7 @@ export async function prepareGitCandidateTransfer(params: {
           },
         };
         target.results?.push(warning);
-        target.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
+        await reportUpdateStepCompletion(target.progress, { ...warning, index: 0, total: 0 });
       }
     },
   };

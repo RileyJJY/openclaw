@@ -4,7 +4,7 @@ import type { GitWorkerCommand, GitWorkerReply, GitWorkerResult } from "./git-wo
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
-  async (input, channel) => {
+  async (input, channel, control) => {
     try {
       if (
         !channel ||
@@ -36,7 +36,6 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
             case "workspace.manifest.overlay":
             case "workspace.manifest.pair":
             case "workspace.manifest.staged":
-            case "workspace.manifest.stage-input":
             case "workspace.manifest.entries":
             case "workspace.manifest.file":
             case "workspace.manifest.nodes":
@@ -45,14 +44,33 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
                 ({ executeWorkspaceManifestComputation }) =>
                   executeWorkspaceManifestComputation(command),
               );
+            case "workspace.manifest.stage-input":
+            case "workspace.manifest.tree-input":
+            case "workspace.manifest.remote-capture":
+              // Streamed fs-safe creation owns native descriptors until cleanup settles.
+              return control.runNativeSection(async () => {
+                const { executeWorkspaceManifestComputation } =
+                  await import("../gateway/worker-environments/workspace-manifest-computation.runtime.js");
+                return await executeWorkspaceManifestComputation(command, control.throwIfCancelled);
+              });
             case "workspace.artifacts":
               return import("../gateway/worker-environments/workspace-result-inventory.runtime.js").then(
                 ({ collectStagedWorkerArtifacts }) => collectStagedWorkerArtifacts(command.input),
               );
+            case "worktree.eviction-purge":
+              return control.runNativeSection(async () => {
+                const { executeGitWorktreeOperation } =
+                  await import("../agents/worktrees/git-worktree-operations.runtime.js");
+                return await executeGitWorktreeOperation(command);
+              });
             case "worktree.snapshot-verify-exact":
             case "worktree.snapshot":
             case "worktree.provisioning-inspection":
             case "worktree.cleanup-inspection":
+            case "worktree.cleanup-fingerprint":
+            case "worktree.eviction-classify":
+            case "worktree.eviction-source":
+            case "worktree.eviction-repositories":
             case "worktree.git-size":
             case "worktree.checkout-transition-size":
             case "worktree.directory-size":

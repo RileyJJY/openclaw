@@ -23,6 +23,23 @@ export type SessionNavigationEntry = Pick<SessionEntryBase, "id" | "parentId"> &
 
 type SessionParentEntry = Pick<SessionEntryBase, "id" | "parentId">;
 
+/** Physical replay traversal stops on unknown rows; budget exhaustion retains the current ID. */
+export function* walkSessionCurrentTurn(
+  initialParentId: string | null,
+  ancestorLimit: number,
+): Generator<string, string | null, (SessionParentEntry & { traversable: boolean }) | undefined> {
+  let parentId = initialParentId;
+  let remainingAncestors = ancestorLimit;
+  while (parentId && remainingAncestors-- > 0) {
+    const parent = yield parentId;
+    if (!parent || parent.id !== parentId || !parent.traversable) {
+      break;
+    }
+    parentId = parent.parentId;
+  }
+  return parentId;
+}
+
 function resolveSessionCanonicalParentId(
   parentId: string | null,
   byId: ReadonlyMap<string, SessionParentEntry>,
@@ -169,9 +186,6 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
   }
 
   protected resolveOpaqueLeafTargetId(targetId: string | null): string | null {
-    if (targetId === null || this.byId.has(targetId)) {
-      return targetId;
-    }
     return this.resolveCanonicalParentId(targetId);
   }
 
@@ -259,7 +273,7 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
     hasParentId = Object.hasOwn(entry, "parentId"),
   ): void {
     if (entry.type === "label" && !this.byId.has(entry.targetId)) {
-      this.opaqueParentsById.set(entry.id, this.resolveCanonicalParentId(entry.parentId));
+      this.opaqueParentsById.set(entry.id, entry.parentId);
       return;
     }
     const crossesResetBoundary =

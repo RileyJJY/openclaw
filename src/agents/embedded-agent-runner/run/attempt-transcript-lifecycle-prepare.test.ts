@@ -205,7 +205,7 @@ describe("admitted lazy session writer", () => {
 
   it("keeps its uncommitted creator visible inside a same-key lifecycle mutation", async () => {
     await withInitialWriter(async ({ target }) => {
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("create", {
         scope: target.storePath,
         identities: [target.sessionKey],
         prepare: async () => {
@@ -221,7 +221,7 @@ describe("admitted lazy session writer", () => {
   it("rejects an existing row before reacquiring its enclosing lifecycle mutation", async () => {
     await withInitialWriter(async ({ manager, runParams, target }) => {
       manager.appendMessage(userMessage);
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("create", {
         scope: target.storePath,
         identities: [target.sessionKey],
         run: async () => {
@@ -274,7 +274,7 @@ describe("admitted lazy session writer", () => {
           });
           expect(Boolean(loadSessionEntry(target))).toBe(existing);
           expect(
-            preparePersistedCurrentUserTurn({
+            await preparePersistedCurrentUserTurn({
               sessionManager: manager,
               message,
               recorder,

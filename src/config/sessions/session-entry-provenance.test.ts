@@ -1,70 +1,95 @@
-import { describe, expect, it } from "vitest";
-import { sessionPersonalProfileId, type SessionCreatedActor } from "./session-entry-provenance.js";
+import { expect, it } from "vitest";
+import {
+  inheritSpawnSessionOwner,
+  sessionPersonalProfileId,
+  type SessionActor,
+  type SessionCreatedActor,
+} from "./session-entry-provenance.js";
 
-describe("sessionPersonalProfileId", () => {
-  const creator: SessionCreatedActor = { type: "human", source: "profile", id: "profile-creator" };
+type Source = Parameters<typeof sessionPersonalProfileId>[0];
+const creator: SessionCreatedActor = { type: "human", source: "profile", id: "profile-creator" };
+const human = (id?: string, label?: string): SessionActor => ({ type: "human", id, label });
+const spawningAgent: SessionActor = { type: "agent", id: "roboclaw" };
 
-  it("prefers the assigned human over the authenticated human creator", () => {
-    expect(
-      sessionPersonalProfileId({
-        owner: { actor: { type: "human", id: "profile-owner", label: "profile-other" } },
-        createdActor: creator,
-      }),
-    ).toBe("profile-owner");
-  });
-
-  it("uses the authenticated human creator when there is no assignment", () => {
-    expect(sessionPersonalProfileId({ createdActor: creator })).toBe("profile-creator");
-  });
-
-  it.each(["agent", "system"] as const)(
-    "falls back to the authenticated human creator for a %s assignment",
-    (type) => {
-      expect(
-        sessionPersonalProfileId({
-          owner: { actor: { type, id: "profile-not-a-human" } },
-          createdActor: creator,
-        }),
-      ).toBe("profile-creator");
-    },
-  );
-
-  it.each(["channel", "unknown"] as const)(
-    "does not treat a %s creator ID or label as an authenticated profile",
-    (source) => {
-      expect(
-        sessionPersonalProfileId({
-          createdActor: { type: "human", source, id: "profile-creator", label: "profile-owner" },
-        }),
-      ).toBeUndefined();
-    },
-  );
-
-  it("does not fall back or infer an ID from a label when an assigned human has no ID", () => {
-    expect(
-      sessionPersonalProfileId({
-        owner: { actor: { type: "human", label: "profile-owner" } },
-        createdActor: creator,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not infer a creator profile from a display label", () => {
-    expect(
-      sessionPersonalProfileId({
-        createdActor: { type: "human", source: "profile", label: "profile-creator" },
-      }),
-    ).toBeUndefined();
-  });
-
-  it("returns no profile when the session has no human identity", () => {
-    expect(sessionPersonalProfileId(undefined)).toBeUndefined();
-    expect(sessionPersonalProfileId({})).toBeUndefined();
-    expect(
-      sessionPersonalProfileId({
+it("resolves personal profiles from assigned humans or authenticated creators only", () => {
+  const cases: Array<[Source, string | undefined]> = [
+    [
+      { owner: { actor: human("profile-owner", "profile-other") }, createdActor: creator },
+      "profile-owner",
+    ],
+    [{ createdActor: creator }, "profile-creator"],
+    [
+      { owner: { actor: { type: "agent", id: "profile-not-a-human" } }, createdActor: creator },
+      "profile-creator",
+    ],
+    [
+      {
+        createdActor: {
+          type: "human",
+          source: "channel",
+          id: "profile-creator",
+          label: "profile-owner",
+        },
+      },
+      undefined,
+    ],
+    [{ owner: { actor: human(undefined, "profile-owner") }, createdActor: creator }, undefined],
+    [{ createdActor: { type: "human", source: "profile", label: "profile-creator" } }, undefined],
+    [undefined, undefined],
+    [{}, undefined],
+    [
+      {
         owner: { actor: { type: "agent", id: "profile-owner" } },
         createdActor: { type: "system", id: "profile-creator" },
-      }),
-    ).toBeUndefined();
-  });
+      },
+      undefined,
+    ],
+  ];
+  for (const [source, expected] of cases) {
+    expect(sessionPersonalProfileId(source), JSON.stringify(source)).toBe(expected);
+  }
+});
+
+it("inherits only the requesting human's current owner, including canonical profile aliases", () => {
+  const cases: Array<{
+    source: Source;
+    requester: string | undefined;
+    actor: SessionActor;
+    now?: number;
+    resolve?: (profileId: string) => string | undefined;
+  }> = [
+    { source: { createdActor: creator }, requester: creator.id, actor: human(creator.id), now: 42 },
+    {
+      source: { owner: { actor: human("profile-owner") }, createdActor: creator },
+      requester: "profile-owner",
+      actor: human("profile-owner"),
+      now: 42,
+    },
+    { source: { createdActor: creator }, requester: "profile-other", actor: spawningAgent },
+    { source: { createdActor: creator }, requester: undefined, actor: spawningAgent },
+    {
+      source: { owner: { actor: human("profile-before-merge") }, createdActor: creator },
+      requester: "profile-after-merge",
+      actor: human("profile-after-merge"),
+      now: 42,
+      resolve: (id) => (id === "profile-before-merge" ? "profile-after-merge" : id),
+    },
+    {
+      source: { owner: { actor: { type: "agent", id: "another-agent" } }, createdActor: creator },
+      requester: creator.id,
+      actor: spawningAgent,
+    },
+    {
+      source: { createdActor: { type: "human", source: "channel", id: "discord-user" } },
+      requester: "discord-user",
+      actor: spawningAgent,
+    },
+  ];
+  for (const { source, requester, actor, now, resolve } of cases) {
+    expect(inheritSpawnSessionOwner(source, spawningAgent, requester, now, resolve)).toEqual({
+      actor,
+      assignedBy: spawningAgent,
+      assignedAt: now ?? expect.any(Number),
+    });
+  }
 });

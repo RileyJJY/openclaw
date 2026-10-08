@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
@@ -18,6 +19,108 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow submit gates", () => {
+  it.each(["retry", "missing", "choose-workspace"] as const)(
+    "retains a saved project after failed discovery until %s resolves the choice",
+    async (recovery) => {
+      replaceBrowserPreference("ws://gateway.example", "main", {
+        workspace: "/workspace",
+        folder: "/workspace",
+        projectId: "registered",
+      });
+      const discovery = createDeferred<ProjectsListResult>();
+      let projects = discovery.promise;
+      const { place, flow, context } = createDraftFixture({
+        methods: ["sessions.create", "projects.list", "worktrees.branches"],
+        request: (method) =>
+          method === "projects.list"
+            ? projects
+            : Promise.resolve({ repositoryStatus: "not_git", branches: [] }),
+      });
+      const read = place.browser.refreshProjects();
+      flow.setMessage("work in the saved project");
+      await flow.submit();
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      discovery.reject(new Error("Project discovery unavailable"));
+      await read;
+      place.restorePreferenceSelections();
+
+      expect(place.preferenceSelection().projectId).toBe("registered");
+      expect(flow.canSubmit()).toBe(false);
+      await flow.submit();
+      await flow.submit(undefined, true);
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+
+      if (recovery === "choose-workspace") {
+        place.applyFolder("/workspace");
+      } else {
+        projects = Promise.resolve({
+          projects:
+            recovery === "retry"
+              ? [{ id: "registered", displayName: "Registered", source: "registered" }]
+              : [],
+        });
+        await place.browser.refreshProjects();
+        place.restorePreferenceSelections();
+      }
+      expect(flow.canSubmit()).toBe(true);
+      await flow.submit();
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      const params = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+      if (recovery === "retry") {
+        expect(params).toHaveProperty("projectId", "registered");
+      } else {
+        expect(params).not.toHaveProperty("projectId");
+      }
+    },
+  );
+
+  it("does not block ordinary local submission when optional project discovery fails", async () => {
+    const { place, flow, context } = createDraftFixture({
+      methods: ["sessions.create", "projects.list"],
+      request: () => Promise.reject(new Error("Project discovery unavailable")),
+    });
+    await place.browser.refreshProjects();
+    place.restorePreferenceSelections();
+    flow.setMessage("start locally");
+    expect(flow.canSubmit()).toBe(true);
+    await flow.submit();
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]).not.toHaveProperty(
+      "projectId",
+    );
+  });
+
+  it("waits for the configured default repository before admitting the first session", async () => {
+    const discovery = createDeferred<ProjectsListResult>();
+    const { place, flow, context } = createDraftFixture({
+      methods: ["sessions.create", "projects.list"],
+      request: (method) => (method === "projects.list" ? discovery.promise : Promise.resolve({})),
+    });
+    const read = place.browser.refreshProjects();
+    flow.setMessage("inspect the repository");
+    expect(place.browser.projectsLoading).toBe(true);
+    expect(flow.canSubmit()).toBe(false);
+    await flow.submit();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+
+    discovery.resolve({
+      projects: [],
+      defaultRepository: {
+        identity: "acme/private-repo",
+        url: "https://github.com/acme/private-repo.git",
+        ref: "main",
+      },
+    });
+    await read;
+    place.restorePreferenceSelections();
+    expect(flow.canSubmit()).toBe(true);
+    await flow.submit();
+    expect(context.sessions.createResult).toHaveBeenCalledWith(
+      expect.objectContaining({ projectGitUrl: "https://github.com/acme/private-repo.git" }),
+      expect.objectContaining({ reconciliation: "background" }),
+    );
+  });
+
   it.each([
     {
       reason: "missing-auth",
@@ -163,7 +266,10 @@ describe("DraftSubmissionFlow submit gates", () => {
         build: () => {
           const fixture = createDraftFixture();
           fixture.flow.setMessage("hello");
-          fixture.flow.attachmentDraft.updatePending(fixture.flow.attachmentDraft.readSignal, 1);
+          fixture.flow.attachmentDraft.reads.updatePending(
+            fixture.flow.attachmentDraft.reads.readSignal,
+            1,
+          );
           return fixture;
         },
       },
@@ -262,7 +368,10 @@ describe("DraftSubmissionFlow submit gates", () => {
       if (result !== "git") {
         expect(place.repository.kind).toBe("unavailable");
         expect(place.preferenceSelection().worktree).toBe(true);
-        expect(flow.submitBlock()?.gate).toBe("worktree-unavailable");
+        expect(flow.submitBlock()).toEqual({
+          gate: "worktree-unavailable",
+          reason: "Couldn't verify Git for this folder. Choose it again to retry.",
+        });
         await flow.submit();
         await flow.submit(undefined, true);
         flow.setMessage("");
@@ -352,8 +461,8 @@ describe("DraftSubmissionFlow submit gates", () => {
 it("keeps attachment preparation gated without duplicating its composer status after Start", async () => {
   const { flow, context } = createDraftFixture();
   flow.setMessage("Include the pending attachment");
-  const signal = flow.attachmentDraft.readSignal;
-  flow.attachmentDraft.updatePending(signal, 1);
+  const signal = flow.attachmentDraft.reads.readSignal;
+  flow.attachmentDraft.reads.updatePending(signal, 1);
   expect(flow.submitBlock()?.gate).toBe("attachment-reads");
   expect(flow.canSubmit()).toBe(false);
   expect(flow.submitDisabledReason()).toBe("Reading attachment");
@@ -362,6 +471,6 @@ it("keeps attachment preparation gated without duplicating its composer status a
 
   expect(context.sessions.createResult).not.toHaveBeenCalled();
   expect(flow.blockedSubmitNotice()).toBeUndefined();
-  flow.attachmentDraft.updatePending(signal, -1);
+  flow.attachmentDraft.reads.updatePending(signal, -1);
   expect(flow.canSubmit()).toBe(true);
 });
