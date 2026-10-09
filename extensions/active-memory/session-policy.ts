@@ -174,12 +174,6 @@ function isAgentHarnessSessionKey(sessionKey: string): boolean {
   return rest.startsWith("harness:");
 }
 
-function isInternalSessionEffectsSessionKey(sessionKey: string): boolean {
-  const normalized = sessionKey.trim().toLowerCase();
-  const rest = parseAgentSessionKey(normalized)?.rest;
-  return rest?.startsWith("internal-session-effects:") === true;
-}
-
 export function shouldSkipActiveMemoryForHarnessSession(params: {
   api: OpenClawPluginApi;
   agentId?: string;
@@ -224,15 +218,12 @@ export function isEligibleInteractiveSession(ctx: {
   if (ctx.inputProvenance?.kind === "inter_session") {
     return false;
   }
-  // Match only bare or agent-prefixed narrative keys, not chat peer ids such as
+  // Match internal helper namespaces, not chat peer ids such as
   // "agent:main:feishu:group:dreaming-narrative-light-room".
-  const sessionKey = ctx.sessionKey ?? "";
-  if (isInternalSessionEffectsSessionKey(sessionKey)) {
-    return false;
-  }
+  const sessionKey = ctx.sessionKey?.trim() ?? "";
   if (
-    /^dreaming-narrative-(light|rem|deep)-/i.test(sessionKey) ||
-    /^agent:[^:]+:dreaming-narrative-(light|rem|deep)-/i.test(sessionKey)
+    /^agent:[^:]+:internal-session-effects:/i.test(sessionKey) ||
+    /^(?:agent:[^:]+:)?dreaming-narrative-(light|rem|deep)-/i.test(sessionKey)
   ) {
     return false;
   }
