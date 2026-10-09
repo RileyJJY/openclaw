@@ -54,12 +54,14 @@ const event = {
   data: { phase: "error", startedAt: 1_000, endedAt: 2_000, error },
 };
 
-async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
+async function seed(
+  assistantBranch?: "active" | "inactive" | "other-run" | "commentary" | "success",
+) {
+  const hasPriorOutput = assistantBranch === "commentary" || assistantBranch === "success";
   await upsertSessionEntryCore(target, {
     sessionId: target.sessionId,
     updatedAt: 1_000,
     startedAt: 1_000,
-    status: "running",
     lifecycleRunId: runId,
     activeWriterRunId: runId,
     goal: {
@@ -90,9 +92,25 @@ async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
             parentId: "user-turn",
             message: {
               role: "assistant",
-              content: [],
-              stopReason: "error",
-              errorMessage: "Provider failed",
+              content: hasPriorOutput
+                ? [
+                    {
+                      type: "text",
+                      text: "Running it now.",
+                      ...(assistantBranch === "commentary"
+                        ? {
+                            textSignature: JSON.stringify({
+                              v: 1,
+                              id: "commentary",
+                              phase: "commentary",
+                            }),
+                          }
+                        : {}),
+                    },
+                  ]
+                : [],
+              stopReason: hasPriorOutput ? "stop" : "error",
+              errorMessage: hasPriorOutput ? undefined : "Provider failed",
               __openclaw: { runId: assistantBranch === "other-run" ? "previous-run" : runId },
             },
           },
@@ -185,12 +203,12 @@ describe("durable pre-reply run failure", () => {
                   key: target.sessionKey,
                   sessionId: target.sessionId,
                   kind: "direct",
-                  status: "running",
                   updatedAt: before.updatedAt,
                   startedAt: before.startedAt,
                   goal: before.goal,
                 },
                 lifecycleRunId: runId,
+                activeRunState: { active: true, runIds: [runId] },
                 event: queuedEvent,
                 includeSession: true,
                 lifecycle: true,
@@ -284,17 +302,17 @@ describe("durable pre-reply run failure", () => {
         event: { ...event, data: { ...event.data, error: providerError } },
       });
       const [report] = await reports();
+      const failureCopy =
+        "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
       expect(report).toMatchObject({
-        content: expect.stringMatching(
-          /^Your request couldn't be completed: ⚠️ Authentication failed \(provider returned HTTP 401\)/,
-        ),
-        details: { runId, error: expect.stringMatching(/^⚠️ Authentication failed/) },
+        content: `Your request couldn't be completed: ${failureCopy}`,
+        details: { runId, error: failureCopy },
       });
       expect(JSON.stringify(report)).not.toContain("Missing bearer");
     });
   });
 
-  it.each(["active", "inactive", "other-run"] as const)(
+  it.each(["active", "inactive", "other-run", "commentary", "success"] as const)(
     "checks assistant output on the %s branch for this run",
     async (branch) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -468,7 +486,7 @@ describe("durable pre-reply run failure", () => {
             },
           }),
         ).rejects.toThrow("Run authority expired");
-        expect(loadSessionEntry(target)?.status).toBe(when === "after" ? "failed" : "running");
+        expect(loadSessionEntry(target)?.status).toBe(when === "after" ? "failed" : undefined);
         expect(await reports()).toEqual([]);
       });
     },
@@ -513,7 +531,6 @@ async function createCliHistoryFixture() {
     startedAt: 1_000,
     lifecycleRunId: cliRunId,
     activeWriterRunId: cliRunId,
-    status: "running",
   });
   const scope = await resolveSessionTranscriptRuntimeTarget(cliTarget);
   const admission = prepareSystemAgentRunAdmission({}, cliRunId, "main", "cli-timeout-test");
