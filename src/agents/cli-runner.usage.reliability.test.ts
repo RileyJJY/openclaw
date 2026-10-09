@@ -10,11 +10,7 @@ import {
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
-import {
-  restoreCliRunnerTestDeps,
-  runPreparedCliAgent as runPreparedCliAgentCore,
-  setCliRunnerTestDeps,
-} from "./cli-runner.js";
+import { runPreparedCliAgent as runPreparedCliAgentCore } from "./cli-runner.js";
 import { createManagedRun, supervisorSpawnMock } from "./cli-runner.test-support.js";
 import { wrapPreparedCliRunWithTestAdmission } from "./cli-runner/execute.test-support.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
@@ -36,6 +32,22 @@ vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
+vi.mock("../utils/sleep.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils/sleep.js")>();
+  return {
+    ...actual,
+    sleep: vi.fn(async (ms: Parameters<typeof actual.sleep>[0]) => {
+      void ms;
+    }),
+  };
+});
+vi.mock("./command/attempt-execution.helpers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./command/attempt-execution.helpers.js")>();
+  return {
+    ...actual,
+    claudeCliSessionTranscriptHasContent: vi.fn(async () => false),
+  };
+});
 vi.mock("../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
   resolveModelOverridePolicy: vi.fn(),
@@ -99,14 +111,9 @@ function createContext(params: {
 describe("CLI runner terminal usage persistence", () => {
   beforeEach(() => {
     supervisorSpawnMock.mockReset();
-    setCliRunnerTestDeps({
-      claudeCliSessionTranscriptHasContent: async () => false,
-      delay: async () => {},
-    });
   });
 
   afterEach(() => {
-    restoreCliRunnerTestDeps();
     vi.unstubAllEnvs();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
