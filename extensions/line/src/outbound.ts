@@ -117,7 +117,10 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     };
     const recordResult = async (
       resultPromise: Promise<LineSendResult>,
-      { deferFailureToBatchRecovery = false }: { deferFailureToBatchRecovery?: boolean } = {},
+      {
+        deferFailureToBatchRecovery = false,
+        includeAcceptedResults = true,
+      }: { deferFailureToBatchRecovery?: boolean; includeAcceptedResults?: boolean } = {},
     ): Promise<LineSendResult> => {
       let result: LineSendResult;
       try {
@@ -128,10 +131,12 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           findLineHttpError(error)?.status === 400 &&
           resolveLineNonDispatchRetryable(error) !== undefined
         ) {
-          throw isChannelPartialDeliveryError(error) ? withAcceptedResults(error) : error;
+          throw isChannelPartialDeliveryError(error) && includeAcceptedResults
+            ? withAcceptedResults(error)
+            : error;
         }
         if (acceptedResults.length > 0) {
-          throw withAcceptedResults(error);
+          throw includeAcceptedResults ? withAcceptedResults(error) : error;
         }
         // Accepted payload parts keep their receipt and must not wait for quota diagnosis.
         const refusal = isChannelPartialDeliveryError(error)
@@ -193,7 +198,9 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
             const recoveryErrors: unknown[] = [];
             for (const message of retryCandidates) {
               try {
-                await recordResult(sendBatch(to, [message], sendOptions));
+                await recordResult(sendBatch(to, [message], sendOptions), {
+                  includeAcceptedResults: false,
+                });
               } catch (recoveryError) {
                 recoveryErrors.push(recoveryError);
               }

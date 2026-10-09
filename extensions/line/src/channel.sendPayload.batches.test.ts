@@ -326,6 +326,13 @@ describe("line outbound sendPayload batches", () => {
         visibleReplySent: true,
       },
     });
+    expect(
+      (
+        caught as {
+          deliveryResult: { receipt: { parts: Array<{ platformMessageId: string }> } };
+        }
+      ).deliveryResult.receipt.parts.map((part) => part.platformMessageId),
+    ).toEqual(["accepted-A", "accepted-B", "accepted-C"]);
     expect(mocks.pushMessagesLine).toHaveBeenCalledTimes(4);
   });
 });
