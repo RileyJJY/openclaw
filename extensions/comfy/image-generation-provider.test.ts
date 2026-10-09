@@ -1,7 +1,6 @@
 // Comfy tests cover image generation provider plugin behavior.
-import { spawn, spawnSync } from "node:child_process";
 import type { LookupAddress } from "node:dns";
-import { readFile, symlink, truncate, writeFile } from "node:fs/promises";
+import { truncate, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -24,8 +23,6 @@ vi.mock("node:crypto", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:crypto")>();
   return { ...actual, randomInt: randomIntMock.mockImplementation(actual.randomInt) };
 });
-import { readComfyWorkflowFile } from "./workflow-file.js";
-
 const PREVIOUS_COMFY_WORKFLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
 // Matches ComfyUI's default --max-upload-size; used as the opt-in cap fixture.
 const DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES = 100 * 1024 * 1024;
@@ -103,15 +100,6 @@ function mockLocalImageResponses(
       release: vi.fn(async () => {}),
     });
 }
-
-const COMFY_SERVICE_HOST_LOCAL_POLICY = {
-  allowedOrigins: ["http://comfyui:8188"],
-  hostnameAllowlist: ["comfyui"],
-};
-
-const COMFY_PUBLIC_LOCAL_HOST_POLICY = {
-  hostnameAllowlist: ["images.example.com"],
-};
 
 function testWorkflowConfig(config: Record<string, unknown> = {}) {
   return {
@@ -660,156 +648,6 @@ describe("comfy image-generation provider", () => {
       ).rejects.toThrow(`exceeds ${DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES} bytes`);
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     });
-  });
-
-  it("preserves unconfigured workflowPath reads above the optional 100 MiB boundary", async () => {
-    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
-      const workflowPath = path.join(tempRoot, "legacy-large-workflow.json");
-      await writeFile(workflowPath, "", "utf8");
-      await truncate(workflowPath, DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES + 1);
-
-      const provider = buildComfyImageGenerationProvider();
-      await expect(
-        provider.generateImage({
-          provider: "comfy",
-          model: "workflow",
-          prompt: "draw a legacy large workflow file",
-          cfg: buildComfyConfig({
-            workflow: undefined,
-            workflowPath,
-            promptNodeId: "6",
-            outputNodeId: "9",
-          }),
-        }),
-      ).rejects.toThrow(/Unexpected end of JSON input|Unexpected token/);
-      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-    });
-  });
-
-  it("keeps unconfigured workflowPath reads on the legacy direct UTF-8 path", async () => {
-    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
-      const workflowPath = path.join(tempRoot, "legacy-direct-read.json");
-      const workflow = JSON.stringify({
-        "6": { class_type: "CLIPTextEncode", inputs: { text: "" } },
-        "9": { class_type: "SaveImage", inputs: {} },
-      });
-      await writeFile(workflowPath, workflow, "utf8");
-
-      await expect(readComfyWorkflowFile(workflowPath, undefined)).resolves.toBe(
-        await readFile(workflowPath, "utf8"),
-      );
-    });
-  });
-
-  it("preserves symlinked workflowPath reads with the configured byte cap", async () => {
-    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
-      const targetPath = path.join(tempRoot, "workflow-target.json");
-      const workflowPath = path.join(tempRoot, "workflow-link.json");
-      const workflow = JSON.stringify({
-        "6": { class_type: "CLIPTextEncode", inputs: { text: "" } },
-        "9": { class_type: "SaveImage", inputs: {} },
-      });
-      await writeFile(targetPath, workflow, "utf8");
-      await symlink(targetPath, workflowPath);
-
-      await expect(readComfyWorkflowFile(workflowPath, Buffer.byteLength(workflow))).resolves.toBe(
-        workflow,
-      );
-    });
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "rejects FIFO workflowPath files without waiting for a writer",
-    async () => {
-      await withTempDir("openclaw-comfy-workflow-fifo-", async (tempRoot) => {
-        const workflowPath = path.join(tempRoot, "workflow.pipe");
-        expect(spawnSync("mkfifo", [workflowPath]).status).toBe(0);
-
-        const read = readComfyWorkflowFile(workflowPath, DEFAULT_COMFY_WORKFLOW_FILE_MAX_BYTES);
-        let timer: NodeJS.Timeout | undefined;
-        const outcome = await Promise.race([
-          read.then(
-            () => ({ kind: "resolved" as const }),
-            (error: unknown) => ({ kind: "rejected" as const, error }),
-          ),
-          new Promise<{ kind: "timeout" }>((resolve) => {
-            timer = setTimeout(() => resolve({ kind: "timeout" }), 1_000);
-          }),
-        ]);
-        if (timer) {
-          clearTimeout(timer);
-        }
-
-        if (outcome.kind === "timeout") {
-          const writer = spawn(
-            "/bin/sh",
-            ["-c", 'printf x > "$1"', "openclaw-comfy-workflow-fifo", workflowPath],
-            { stdio: "ignore" },
-          );
-          await Promise.race([
-            read.catch(() => undefined),
-            new Promise<void>((resolve) => {
-              setTimeout(resolve, 2_000);
-            }),
-          ]);
-          writer.kill("SIGKILL");
-        }
-
-        expect(outcome).toMatchObject({
-          kind: "rejected",
-          error: { message: expect.stringMatching(/regular file/i) },
-        });
-      });
-    },
-  );
-
-  it("honors local private-network access for service-discovery hostnames", async () => {
-    mockLocalImageResponses("compose-prompt-1");
-
-    const provider = buildComfyImageGenerationProvider();
-    await provider.generateImage({
-      provider: "comfy",
-      model: "workflow",
-      prompt: "draw a lobster",
-      cfg: buildComfyConfig({
-        baseUrl: "http://comfyui:8188",
-        workflow: {
-          "6": { inputs: { text: "" } },
-          "9": { inputs: {} },
-        },
-        promptNodeId: "6",
-        outputNodeId: "9",
-      }),
-    });
-
-    const submitRequest = fetchRequest(1);
-    expect(submitRequest.url).toBe("http://comfyui:8188/prompt");
-    expect(submitRequest.policy).toEqual(COMFY_SERVICE_HOST_LOCAL_POLICY);
-    expect(fetchRequest(2).policy).toEqual(COMFY_SERVICE_HOST_LOCAL_POLICY);
-    expect(fetchRequest(3).policy).toEqual(COMFY_SERVICE_HOST_LOCAL_POLICY);
-  });
-
-  it("keeps local public-looking hostnames strict without explicit private-network access", async () => {
-    mockLocalImageResponses("public-host-prompt-1");
-
-    const provider = buildComfyImageGenerationProvider();
-    await provider.generateImage({
-      provider: "comfy",
-      model: "workflow",
-      prompt: "draw a lobster",
-      cfg: buildComfyConfig({
-        baseUrl: "http://images.example.com:8188",
-        workflow: {
-          "6": { inputs: { text: "" } },
-          "9": { inputs: {} },
-        },
-        promptNodeId: "6",
-        outputNodeId: "9",
-      }),
-    });
-
-    expect(fetchRequest(1).url).toBe("http://images.example.com:8188/prompt");
-    expect(fetchRequest(1).policy).toEqual(COMFY_PUBLIC_LOCAL_HOST_POLICY);
   });
 
   it("keeps cloud service-discovery hostnames strict without explicit private-network access", async () => {

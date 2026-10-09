@@ -36,14 +36,14 @@ import {
   normalizeOptionalString,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveUserPath, sleep } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
+import { loadComfyWorkflow } from "./workflow-file.js";
 import {
   isTerminalComfyHistory,
   type ComfyHistoryEntry,
   type ComfyOutputFile,
   type ComfyOutputKind,
 } from "./workflow-history.js";
-import { readComfyWorkflowFile } from "./workflow-file.js";
 
 const DEFAULT_COMFY_LOCAL_BASE_URL = "http://127.0.0.1:8188";
 const DEFAULT_COMFY_CLOUD_BASE_URL = "https://cloud.comfy.org";
@@ -115,13 +115,6 @@ type ComfyWorkflowResult = {
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
   const value = config[key];
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
-function resolveComfyWorkflowFileMaxBytes(config: ComfyProviderConfig): number | undefined {
-  const configured = config.workflowFileMaxBytes;
-  return typeof configured === "number" && Number.isSafeInteger(configured) && configured > 0
-    ? configured
-    : undefined;
 }
 
 function getComfyConfigSource(cfg?: OpenClawConfig): ComfyConfigSource & { path: string } {
@@ -198,28 +191,6 @@ function resolveComfyApiKey(
       : { status: "configured_unavailable" };
   }
   return { status: "missing" };
-}
-
-async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWorkflow> {
-  const workflow = config.workflow;
-  if (isRecord(workflow)) {
-    return structuredClone(workflow);
-  }
-  const workflowPath = normalizeOptionalString(config.workflowPath);
-  if (!workflowPath) {
-    throw new Error(
-      "plugins.entries.comfy.config.<capability>.workflow or workflowPath is required",
-    );
-  }
-
-  const resolvedPath = resolveUserPath(workflowPath);
-  const maxBytes = resolveComfyWorkflowFileMaxBytes(config);
-  const raw = await readComfyWorkflowFile(resolvedPath, maxBytes);
-  const parsed = JSON.parse(raw) as unknown;
-  if (!isRecord(parsed)) {
-    throw new Error(`Comfy workflow at ${resolvedPath} must be a JSON object`);
-  }
-  return parsed;
 }
 
 function setWorkflowInput(

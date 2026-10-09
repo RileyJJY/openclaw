@@ -3,8 +3,39 @@
 // explicit workflowFileMaxBytes limit.
 import fs from "node:fs/promises";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 
-export async function readComfyWorkflowFile(
+export async function loadComfyWorkflow(
+  config: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const workflow = config.workflow;
+  if (isRecord(workflow)) {
+    return structuredClone(workflow);
+  }
+  const workflowPath = normalizeOptionalString(config.workflowPath);
+  if (!workflowPath) {
+    throw new Error(
+      "plugins.entries.comfy.config.<capability>.workflow or workflowPath is required",
+    );
+  }
+
+  const resolvedPath = resolveUserPath(workflowPath);
+  const configuredLimit = config.workflowFileMaxBytes;
+  const maxBytes =
+    typeof configuredLimit === "number" &&
+    Number.isSafeInteger(configuredLimit) &&
+    configuredLimit > 0
+      ? configuredLimit
+      : undefined;
+  const parsed = JSON.parse(await readComfyWorkflowFile(resolvedPath, maxBytes)) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error(`Comfy workflow at ${resolvedPath} must be a JSON object`);
+  }
+  return parsed;
+}
+
+async function readComfyWorkflowFile(
   filePath: string,
   maxBytes: number | undefined,
 ): Promise<string> {
