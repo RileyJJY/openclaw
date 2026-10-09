@@ -46,6 +46,7 @@ import {
   readOpenAICompletionsContentDeltas,
   readOpenAICompletionsReasoningBatch,
   trackOpenAICompletionsReasoningUsage,
+  trackOpenAICompletionsUsageProgress,
   type MutableAssistantOutput,
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
   type OpenAICompletionsTextSource,
@@ -400,6 +401,7 @@ export async function processCompletionsStream(
   });
   const events = directMode ? guardedStream : iterateModelStream(guardedStream, options?.signal);
   let maxReasoningTokens: number | undefined;
+  let usageCounters = new Map<string, number>();
   for await (const rawChunk of events) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
@@ -408,18 +410,20 @@ export async function processCompletionsStream(
     }
     const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
-    const reasoningUsage = trackOpenAICompletionsReasoningUsage(
-      chunk.usage ?? choice?.usage,
-      maxReasoningTokens,
-    );
+    const usage = chunk.usage ?? choice?.usage;
+    const usageProgress = trackOpenAICompletionsUsageProgress(usage, usageCounters);
+    usageCounters = usageProgress.maxCounters;
+    const reasoningUsage = trackOpenAICompletionsReasoningUsage(usage, maxReasoningTokens);
     maxReasoningTokens = reasoningUsage.maxTokens;
     // Keep transport liveness alive for every provider chunk, but distinguish
-    // heartbeat-only choices:[] frames from actual model output for diagnostics. An
-    // advancing usage-only reasoning counter is also model progress, even when the
-    // provider hides the reasoning text and sends no choice delta.
+    // heartbeat-only choices:[] frames from actual model output for diagnostics.
+    // Finish reasons and advancing usage counters are progress even when a provider
+    // sends no choice delta or exposes no reasoning text.
     notifyLlmRequestActivity(
       options?.signal,
-      hasOpenAICompletionsModelProgress(chunk) || reasoningUsage.hasProgress,
+      hasOpenAICompletionsModelProgress(chunk) ||
+        Boolean(choice?.finish_reason) ||
+        usageProgress.hasProgress,
     );
     output.responseId ||= chunk.id;
     // Retain the provider-returned model when it differs from the requested id so
@@ -428,7 +432,6 @@ export async function processCompletionsStream(
     if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
       output.responseModel ||= chunk.model;
     }
-    const usage = chunk.usage || choice?.usage;
     if (usage) {
       output.usage = parseOpenAICompletionsUsage(usage, model, {
         includeReasoningTokens: !directMode,

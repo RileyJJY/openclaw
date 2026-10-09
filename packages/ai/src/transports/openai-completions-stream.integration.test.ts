@@ -11,10 +11,7 @@ import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime } from "../stream.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
-import {
-  processCompletionsStream,
-  shouldEmitOpenAICompletionsReasoning,
-} from "./openai-completions-stream.js";
+import { processCompletionsStream } from "./openai-completions-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import {
   createAssistantOutput,

@@ -204,7 +204,7 @@ describe("completions model-progress deadline", () => {
           "stream ended before chunk activity was parsed",
         );
       }
-      expect(stream.activity).toEqual([true, false, false, false, false]);
+      expect(stream.activity).toEqual([true, true, true, false, false]);
       expect(stream.onTimeout).not.toHaveBeenCalled();
     } finally {
       await stream.close();

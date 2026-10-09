@@ -236,6 +236,38 @@ export function trackOpenAICompletionsReasoningUsage(
   };
 }
 
+export function trackOpenAICompletionsUsageProgress(
+  rawUsage: unknown,
+  previousCounters: ReadonlyMap<string, number>,
+): { hasProgress: boolean; maxCounters: Map<string, number> } {
+  const counters = new Map(previousCounters);
+  let hasProgress = false;
+
+  function visit(value: unknown, path: string): void {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      const previous = counters.get(path) ?? 0;
+      if (value > previous) {
+        counters.set(path, value);
+        hasProgress = true;
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => visit(item, `${path}[${index}]`));
+      return;
+    }
+    if (!isRecord(value)) {
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      visit(child, path ? `${path}.${key}` : key);
+    }
+  }
+
+  visit(rawUsage, "");
+  return { hasProgress, maxCounters: counters };
+}
+
 type OpenAICompletionsReasoningBatch = {
   readonly deltas: readonly OpenAICompletionsContentDelta[];
   readonly mirroredThinking: readonly string[];

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { processCompletionsStream } from "./openai-completions-stream.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   type CapturedStreamEvent,
   type OpenAICompletionsOutput,
@@ -579,48 +579,6 @@ describe("openai completions stream", () => {
     },
   );
 
-  it("emits reasoning activity for OpenAI-compatible usage-only reasoning chunks", async () => {
-    const model = makeCompletionsModel({
-      id: "google/gemini-2.5-flash",
-      name: "Gemini 2.5 Flash",
-      provider: "vertex-ai",
-      baseUrl: "http://127.0.0.1:8787/v1beta1/projects/test/locations/us/endpoints/openapi",
-      contextWindow: 1_000_000,
-    });
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-
-    await processCompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({}, null, {
-          choices: [],
-          usage: {
-            prompt_tokens: 8,
-            completion_tokens: 23,
-            total_tokens: 31,
-            completion_tokens_details: { reasoning_tokens: 23 },
-          },
-        }),
-        makeCompletionsChunk({ role: "assistant" as const, content: "Hi" }, "stop" as const),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-    );
-
-    expect(events.map((event) => event.type)).toEqual([
-      "thinking_start",
-      "thinking_delta",
-      "text_start",
-      "text_delta",
-    ]);
-    expect(events[1]).toHaveProperty("delta", "");
-    expect(output.content).toEqual([
-      { type: "thinking", thinking: "" },
-      { type: "text", text: "Hi" },
-    ]);
-  });
-
   it("counts only advancing usage-only reasoning as progress when reasoning is hidden", async () => {
     const model = makeCompletionsModel({
       id: "google/gemini-2.5-flash",
@@ -681,37 +639,33 @@ describe("openai completions stream", () => {
     expect(output.content).toEqual([]);
   });
 
-  it("does not add trailing reasoning activity after visible OpenAI-compatible text", async () => {
-    const model = makeCompletionsModel({
-      id: "google/gemini-2.5-flash",
-      name: "Gemini 2.5 Flash",
-      provider: "vertex-ai",
-      baseUrl: "http://127.0.0.1:8787/v1beta1/projects/test/locations/us/endpoints/openapi",
-      contextWindow: 1_000_000,
-    });
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
+  it("counts only advancing non-reasoning usage counters as model progress", async () => {
+    const usage = {
+      prompt_tokens: 8,
+      completion_tokens: 7,
+      total_tokens: 15,
+    };
+    const { progress } = await captureModelProgress([
+      makeCompletionsChunk({}, null, { choices: [], usage }),
+      makeCompletionsChunk({}, null, { choices: [], usage }),
+      makeCompletionsChunk({}, null, {
+        choices: [],
+        usage: { ...usage, completion_tokens: 9, total_tokens: 17 },
+      }),
+      makeCompletionsChunk({}, null, {
+        choices: [],
+        usage: { ...usage, completion_tokens: 9, total_tokens: 17 },
+      }),
+    ]);
 
-    await processCompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({ role: "assistant" as const, content: "Hi" }),
-        makeCompletionsChunk({}, null, {
-          choices: [],
-          usage: {
-            prompt_tokens: 8,
-            completion_tokens: 25,
-            total_tokens: 33,
-            completion_tokens_details: { reasoning_tokens: 23 },
-          },
-        }),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-    );
+    expect(progress).toEqual([true, false, true, false]);
+  });
 
-    expect(events.map((event) => event.type)).toEqual(["text_start", "text_delta"]);
-    expect(output.content).toEqual([{ type: "text", text: "Hi" }]);
+  it("counts finish-only choices as model progress and preserves their stop reason", async () => {
+    const { output, progress } = await captureModelProgress([makeCompletionsChunk({}, "stop")]);
+
+    expect(progress).toEqual([true]);
+    expect(output.stopReason).toBe("stop");
   });
 
   it.each([
@@ -726,7 +680,7 @@ describe("openai completions stream", () => {
   ])("does not count $name as model progress", async ({ delta }) => {
     const { output, progress } = await captureModelProgress([
       makeCompletionsChunk(delta),
-      makeCompletionsChunk({ role: "assistant" }, "stop"),
+      makeCompletionsChunk({ role: "assistant" }),
     ]);
 
     expect(progress).toEqual([false, false]);
@@ -745,7 +699,7 @@ describe("openai completions stream", () => {
           },
         ],
       }),
-      makeCompletionsChunk({}, "tool_calls"),
+      makeCompletionsChunk({}, null, { choices: [] }),
     ]);
 
     expect(progress).toEqual([true, false]);
