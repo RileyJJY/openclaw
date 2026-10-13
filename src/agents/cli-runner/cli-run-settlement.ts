@@ -602,7 +602,7 @@ export function buildCliRunResult(params: {
         provider: runParams.modelProvider ?? runParams.provider,
         model: context.modelId,
         ...preparedContextAgentMeta,
-        usage: output.diagnosticUsage ?? output.usage,
+        usage: output.usage,
         ...(output.usage ? { lastCallUsage: output.usage } : {}),
         ...(output.diagnosticUsage ? { diagnosticUsage: output.diagnosticUsage } : {}),
         ...(persistedCliSessionId
