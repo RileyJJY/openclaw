@@ -59,4 +59,22 @@ describe("inbound attachment filenames", () => {
       expect(labelForMediaPath(`media://inbound/${basename}`)).toBe(basename);
     }
   });
+
+  it("uses readable fallback labels for assistant MEDIA directives", () => {
+    for (const fileName of [
+      "My Report.pdf",
+      "研究 报告.pdf",
+      "budget#1.pdf",
+      "literal%20name.pdf",
+    ]) {
+      const id = fileName.replace(".pdf", "---123e4567-e89b-12d3-a456-426614174000.pdf");
+      const path = `media://inbound/${encodeURIComponent(id)}`;
+      const message = { role: "assistant", content: `MEDIA:${path}` };
+      const { attachments } = projectMessageMedia(message, normalizeMessage(message).content);
+      expect(attachments[0]).toMatchObject({
+        type: "attachment",
+        attachment: { label: fileName, url: path },
+      });
+    }
+  });
 });
